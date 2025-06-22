@@ -1,13 +1,24 @@
-// 📦 Express backend for Karol's Kasyno Blackjack – Multiplayer Edition
+// 📦 Express + Socket.IO backend for Karol's Kasyno Blackjack – Multiplayer Realtime Edition
 
 const express = require('express');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const http = require('http');
+const { Server } = require('socket.io');
+
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST']
+  }
+});
+
 const port = 3000;
 
-let players = {};
-let tables = {};
+let players = {};  // { username: { balance, history } }
+let tables = {};   // { tableId: { players, dealerHand, status } }
 
 app.use(cors());
 app.use(express.json());
@@ -27,7 +38,6 @@ function calculateHand(hand) {
   return total;
 }
 
-// 🔐 Rejestracja gracza
 app.post('/register', (req, res) => {
   const { username } = req.body;
   if (players[username]) return res.status(400).json({ message: 'Użytkownik już istnieje.' });
@@ -35,14 +45,12 @@ app.post('/register', (req, res) => {
   res.json({ message: `Zarejestrowano gracza ${username}`, balance: 100 });
 });
 
-// 🪑 Tworzenie nowego stołu
 app.post('/create-table', (req, res) => {
   const tableId = uuidv4();
   tables[tableId] = { players: [], dealerHand: [], status: 'waiting' };
   res.json({ tableId });
 });
 
-// 👥 Dołączanie do stołu
 app.post('/join-table', (req, res) => {
   const { username, tableId } = req.body;
   const player = players[username];
@@ -54,16 +62,46 @@ app.post('/join-table', (req, res) => {
   if (table.players.length >= 4) return res.status(400).json({ message: 'Stół pełny.' });
 
   table.players.push({ username, hand: [], bet: 0, status: 'waiting' });
+  io.to(tableId).emit('table_update', table);
   res.json({ message: `Dołączono do stołu ${tableId}`, players: table.players.map(p => p.username) });
 });
 
-// 🔍 Info o stole
-app.get('/table/:tableId', (req, res) => {
-  const table = tables[req.params.tableId];
-  if (!table) return res.status(404).json({ message: 'Nie znaleziono stołu.' });
-  res.json(table);
+app.get('/player/:username', (req, res) => {
+  const player = players[req.params.username];
+  if (!player) return res.status(404).json({ message: 'Nie znaleziono gracza.' });
+  res.json(player);
 });
 
-app.listen(port, () => {
+io.on('connection', (socket) => {
+  console.log('🧠 Nowe połączenie:', socket.id);
+
+  socket.on('join_table', ({ tableId, username }) => {
+    socket.join(tableId);
+    const table = tables[tableId];
+    if (table) {
+      io.to(tableId).emit('table_update', table);
+    }
+  });
+
+  socket.on('start_round', ({ tableId }) => {
+    const table = tables[tableId];
+    if (!table) return;
+    table.dealerHand = [drawCard()];
+
+    table.players.forEach(player => {
+      player.hand = [drawCard(), drawCard()];
+      player.status = 'playing';
+    });
+
+    io.to(tableId).emit('round_started', table);
+
+    setTimeout(() => {
+      io.to(tableId).emit('timer_end');
+      // Tu potem logika rozstrzygnięcia rundy
+    }, 15000);
+  });
+});
+
+server.listen(port, () => {
   console.log(`🃏 Kasyno Blackjack Multiplayer działa na http://localhost:${port}`);
 });
