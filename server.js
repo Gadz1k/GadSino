@@ -67,7 +67,7 @@ app.post('/join-table', (req, res) => {
   if (table.players.find(p => p.username === username)) return res.status(400).json({ message: 'Już jesteś przy tym stole.' });
   if (table.players.length >= 6) return res.status(400).json({ message: 'Stół pełny.' });
 
-  table.players.push({ username, hand: [], bet: 0, status: 'waiting' });
+  table.players.push({ username, hand: [], bet: 0, status: 'waiting', result: '' });
   io.to(tableId).emit('table_update', table);
   res.json({ message: `Dołączono do stołu ${tableId}`, players: table.players.map(p => p.username) });
 });
@@ -114,12 +114,15 @@ io.on('connection', (socket) => {
       current.hand.push(drawCard());
       if (calculateHand(current.hand) > 21) {
         current.status = 'bust';
+        io.to(tableId).emit('table_update', table);
         nextTurn(tableId);
       } else {
         io.to(tableId).emit('table_update', table);
+        io.to(tableId).emit('your_turn', username);
       }
     } else if (action === 'stand') {
       current.status = 'stand';
+      io.to(tableId).emit('table_update', table);
       nextTurn(tableId);
     }
   });
@@ -131,6 +134,7 @@ function startRound(tableId) {
   table.players.forEach(p => {
     p.hand = [drawCard(), drawCard()];
     p.status = 'playing';
+    p.result = '';
   });
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
