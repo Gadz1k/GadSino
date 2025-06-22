@@ -112,7 +112,13 @@ io.on('connection', (socket) => {
 
     if (action === 'hit') {
       current.hand.push(drawCard());
-      io.to(tableId).emit('table_update', table); // Aktualizuj ręce po każdej karcie
+    
+      io.to(tableId).emit('player_updated', {
+        username: current.username,
+        hand: current.hand
+      });
+    
+      io.to(tableId).emit('table_update', table);
 
       if (calculateHand(current.hand) > 21) {
         current.status = 'bust';
