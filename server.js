@@ -20,7 +20,7 @@ function createShoe(decks = 3) {
   let shoe = [];
   for (let i = 0; i < decks; i++) {
     for (let card of singleDeck) {
-      for (let j = 0; j < 4; j++) shoe.push(card); // 4 suits
+      for (let j = 0; j < 4; j++) shoe.push(card);
     }
   }
   return shuffle(shoe);
@@ -31,6 +31,11 @@ function shuffle(deck) {
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
   return deck;
+}
+
+function getSafeTable(table) {
+  const { countdown, ...safe } = table;
+  return safe;
 }
 
 let tables = {
@@ -90,7 +95,7 @@ app.post('/login', async (req, res) => {
 io.on('connection', socket => {
   socket.on('get_table_state', ({ tableId }) => {
     const table = tables[tableId];
-    if (table) socket.emit('table_update', table);
+    if (table) socket.emit('table_update', getSafeTable(table));
   });
 
   socket.on('join_table', ({ tableId, username, slotIndex }) => {
@@ -100,7 +105,7 @@ io.on('connection', socket => {
     if (slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
       table.players[slotIndex] = { username, hand: [], bet: 0, status: 'waiting', result: '' };
       socket.join(tableId);
-      io.to(tableId).emit('table_update', table);
+      io.to(tableId).emit('table_update', getSafeTable(table));
     }
   });
 
@@ -108,7 +113,7 @@ io.on('connection', socket => {
     const table = tables[tableId];
     if (!table) return;
     table.players = table.players.map(p => (p?.username === username ? null : p));
-    io.to(tableId).emit('table_update', table);
+    io.to(tableId).emit('table_update', getSafeTable(table));
   });
 
   socket.on('place_bet', ({ tableId, username, amount }) => {
@@ -123,7 +128,7 @@ io.on('connection', socket => {
       player.status = 'bet_placed';
       user.balance -= amount;
       user.save();
-      io.to(tableId).emit('table_update', table);
+      io.to(tableId).emit('table_update', getSafeTable(table));
 
       const activeCount = table.players.filter(p => p && p.bet > 0).length;
       if (activeCount === 1 && !table.countdown) {
@@ -132,7 +137,6 @@ io.on('connection', socket => {
           if (!tables[tableId]) return clearInterval(table.countdown);
           table.countdownValue--;
           io.to(tableId).emit('countdown_tick', table.countdownValue);
-
           if (table.countdownValue <= 0) {
             clearInterval(table.countdown);
             table.countdown = null;
@@ -159,7 +163,7 @@ io.on('connection', socket => {
       current.status = 'stand';
       nextTurn(tableId);
     }
-    io.to(tableId).emit('table_update', table);
+    io.to(tableId).emit('table_update', getSafeTable(table));
   });
 });
 
@@ -171,7 +175,7 @@ function startRound(tableId) {
   table.dealerHand = [drawCard(tableId), '❓'];
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
-  io.to(tableId).emit('round_started', table);
+  io.to(tableId).emit('round_started', getSafeTable(table));
   promptNextPlayer(tableId);
 }
 
@@ -217,7 +221,7 @@ function playDealer(tableId) {
     } else p.result = 'Przegrana';
   });
 
-  io.to(tableId).emit('round_result', table);
+  io.to(tableId).emit('round_result', getSafeTable(table));
   setTimeout(() => resetTable(tableId), 8000);
 }
 
@@ -229,7 +233,7 @@ function resetTable(tableId) {
   table.currentPlayerIndex = 0;
   table.countdown = null;
   table.countdownValue = 15;
-  io.to(tableId).emit('table_update', table);
+  io.to(tableId).emit('table_update', getSafeTable(table));
 }
 
 app.get('/player/:username', async (req, res) => {
