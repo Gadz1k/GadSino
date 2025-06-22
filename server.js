@@ -287,6 +287,11 @@ function resetTable(tableId) {
   io.to(tableId).emit('table_update', table);
 }
 
-server.listen(port, () => {
-  console.log(`🃏 Kasyno Blackjack Multiplayer działa na http://localhost:${port}`);
+sequelize.sync().then(() => {
+  server.listen(port, () => {
+    console.log(`🃏 Kasyno Blackjack Multiplayer działa na http://localhost:${port}`);
+  });
+}).catch(err => {
+  console.error('Błąd synchronizacji bazy:', err);
 });
+
