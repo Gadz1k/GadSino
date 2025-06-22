@@ -17,8 +17,8 @@ const io = new Server(server, {
 
 const port = 3000;
 
-let players = {};  // { username: { balance, history } }
-let tables = {};   // { tableId: { players, dealerHand, status } }
+let players = {}; // { username: { balance, history } }
+let tables = {};  // { tableId: { players, dealerHand, status, phase, currentPlayerIndex } }
 
 app.use(cors());
 app.use(express.json());
@@ -41,13 +41,19 @@ function calculateHand(hand) {
 app.post('/register', (req, res) => {
   const { username } = req.body;
   if (players[username]) return res.status(400).json({ message: 'Użytkownik już istnieje.' });
-  players[username] = { balance: 100, history: [] };
-  res.json({ message: `Zarejestrowano gracza ${username}`, balance: 100 });
+  players[username] = { balance: 1000, history: [] };
+  res.json({ message: `Zarejestrowano gracza ${username}`, balance: 1000 });
 });
 
 app.post('/create-table', (req, res) => {
   const tableId = uuidv4();
-  tables[tableId] = { players: [], dealerHand: [], status: 'waiting' };
+  tables[tableId] = {
+    players: [],
+    dealerHand: [],
+    status: 'waiting',
+    phase: 'waiting_for_players',
+    currentPlayerIndex: 0
+  };
   res.json({ tableId });
 });
 
@@ -59,7 +65,7 @@ app.post('/join-table', (req, res) => {
   if (!player) return res.status(404).json({ message: 'Gracz nie istnieje.' });
   if (!table) return res.status(404).json({ message: 'Stół nie istnieje.' });
   if (table.players.find(p => p.username === username)) return res.status(400).json({ message: 'Już jesteś przy tym stole.' });
-  if (table.players.length >= 4) return res.status(400).json({ message: 'Stół pełny.' });
+  if (table.players.length >= 6) return res.status(400).json({ message: 'Stół pełny.' });
 
   table.players.push({ username, hand: [], bet: 0, status: 'waiting' });
   io.to(tableId).emit('table_update', table);
@@ -83,24 +89,117 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('start_round', ({ tableId }) => {
+  socket.on('place_bet', ({ tableId, username, amount }) => {
     const table = tables[tableId];
-    if (!table) return;
-    table.dealerHand = [drawCard()];
+    const player = table.players.find(p => p.username === username);
+    if (!player || players[username].balance < amount) return;
 
-    table.players.forEach(player => {
-      player.hand = [drawCard(), drawCard()];
-      player.status = 'playing';
-    });
+    player.bet = amount;
+    player.status = 'bet_placed';
+    players[username].balance -= amount;
 
-    io.to(tableId).emit('round_started', table);
+    if (table.players.every(p => p.bet > 0)) {
+      startRound(tableId);
+    } else {
+      io.to(tableId).emit('table_update', table);
+    }
+  });
 
-    setTimeout(() => {
-      io.to(tableId).emit('timer_end');
-      // Tu potem logika rozstrzygnięcia rundy
-    }, 15000);
+  socket.on('player_action', ({ tableId, username, action }) => {
+    const table = tables[tableId];
+    const current = table.players[table.currentPlayerIndex];
+    if (current.username !== username) return;
+
+    if (action === 'hit') {
+      current.hand.push(drawCard());
+      if (calculateHand(current.hand) > 21) {
+        current.status = 'bust';
+        nextTurn(tableId);
+      } else {
+        io.to(tableId).emit('table_update', table);
+      }
+    } else if (action === 'stand') {
+      current.status = 'stand';
+      nextTurn(tableId);
+    }
   });
 });
+
+function startRound(tableId) {
+  const table = tables[tableId];
+  table.dealerHand = [drawCard(), drawCard()];
+  table.players.forEach(p => {
+    p.hand = [drawCard(), drawCard()];
+    p.status = 'playing';
+  });
+  table.phase = 'playing';
+  table.currentPlayerIndex = 0;
+  io.to(tableId).emit('round_started', table);
+  promptNextPlayer(tableId);
+}
+
+function promptNextPlayer(tableId) {
+  const table = tables[tableId];
+  const player = table.players[table.currentPlayerIndex];
+  if (!player) return;
+  io.to(tableId).emit('your_turn', player.username);
+}
+
+function nextTurn(tableId) {
+  const table = tables[tableId];
+  table.currentPlayerIndex++;
+
+  if (table.currentPlayerIndex >= table.players.length) {
+    playDealer(tableId);
+  } else {
+    promptNextPlayer(tableId);
+  }
+}
+
+function playDealer(tableId) {
+  const table = tables[tableId];
+  let total = calculateHand(table.dealerHand);
+  while (total < 17) {
+    table.dealerHand.push(drawCard());
+    total = calculateHand(table.dealerHand);
+  }
+
+  table.players.forEach(p => {
+    const playerTotal = calculateHand(p.hand);
+    const dealerTotal = total;
+    if (playerTotal > 21) {
+      p.result = 'Przegrana';
+    } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
+      p.result = 'Wygrana';
+      players[p.username].balance += p.bet * 2;
+    } else if (playerTotal === dealerTotal) {
+      p.result = 'Remis';
+      players[p.username].balance += p.bet;
+    } else {
+      p.result = 'Przegrana';
+    }
+  });
+
+  io.to(tableId).emit('round_result', table);
+
+  setTimeout(() => {
+    resetTable(tableId);
+  }, 8000);
+}
+
+function resetTable(tableId) {
+  const table = tables[tableId];
+  table.players.forEach(p => {
+    p.hand = [];
+    p.bet = 0;
+    p.status = 'waiting';
+    p.result = '';
+  });
+  table.dealerHand = [];
+  table.phase = 'waiting_for_bets';
+  table.currentPlayerIndex = 0;
+  io.to(tableId).emit('table_update', table);
+}
 
 server.listen(port, () => {
   console.log(`🃏 Kasyno Blackjack Multiplayer działa na http://localhost:${port}`);
