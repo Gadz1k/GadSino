@@ -29,7 +29,7 @@ function drawCard() {
 }
 
 function calculateHand(hand) {
-  let total = hand.reduce((a, b) => a + b, 0);
+  let total = hand.reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0);
   let aces = hand.filter(c => c === 11).length;
   while (total > 21 && aces > 0) {
     total -= 10;
@@ -67,7 +67,7 @@ app.post('/join-table', (req, res) => {
   if (table.players.find(p => p.username === username)) return res.status(400).json({ message: 'Już jesteś przy tym stole.' });
   if (table.players.length >= 6) return res.status(400).json({ message: 'Stół pełny.' });
 
-  table.players.push({ username, hand: [], bet: 0, status: 'waiting', result: '' });
+  table.players.push({ username, hand: [], bet: 0, status: 'waiting' });
   io.to(tableId).emit('table_update', table);
   res.json({ message: `Dołączono do stołu ${tableId}`, players: table.players.map(p => p.username) });
 });
@@ -108,21 +108,18 @@ io.on('connection', (socket) => {
   socket.on('player_action', ({ tableId, username, action }) => {
     const table = tables[tableId];
     const current = table.players[table.currentPlayerIndex];
-    if (current.username !== username) return;
+    if (!current || current.username !== username) return;
 
     if (action === 'hit') {
       current.hand.push(drawCard());
+      io.to(tableId).emit('table_update', table); // Aktualizuj ręce po każdej karcie
+
       if (calculateHand(current.hand) > 21) {
         current.status = 'bust';
-        io.to(tableId).emit('table_update', table);
         nextTurn(tableId);
-      } else {
-        io.to(tableId).emit('table_update', table);
-        io.to(tableId).emit('your_turn', username);
       }
     } else if (action === 'stand') {
       current.status = 'stand';
-      io.to(tableId).emit('table_update', table);
       nextTurn(tableId);
     }
   });
@@ -130,11 +127,10 @@ io.on('connection', (socket) => {
 
 function startRound(tableId) {
   const table = tables[tableId];
-  table.dealerHand = [drawCard(), drawCard()];
+  table.dealerHand = [drawCard(), '?']; // Ukryj drugą kartę na początku
   table.players.forEach(p => {
     p.hand = [drawCard(), drawCard()];
     p.status = 'playing';
-    p.result = '';
   });
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
@@ -162,6 +158,11 @@ function nextTurn(tableId) {
 
 function playDealer(tableId) {
   const table = tables[tableId];
+
+  if (table.dealerHand[1] === '?') {
+    table.dealerHand[1] = drawCard(); // Odkryj drugą kartę
+  }
+
   let total = calculateHand(table.dealerHand);
   while (total < 17) {
     table.dealerHand.push(drawCard());
