@@ -8,7 +8,7 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
 const sequelize = require('./sequelize'); // twoja konfiguracja Sequelize
-const User = require('./user'); // model User
+const User = require('./models/user'); // model User
 
 const app = express();
 const server = http.createServer(app);
