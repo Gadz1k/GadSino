@@ -75,25 +75,25 @@ app.post('/login', async (req, res) => {
 io.on('connection', socket => {
   console.log('🧠 Nowe połączenie:', socket.id);
 
-  socket.on('join_table', ({tableId, username, slotIndex}) => {
+  socket.on('join_table', ({ tableId, username, slotIndex }) => {
     const table = tables[tableId];
     if (!table) return;
 
-    if (slotIndex === -1) {
-      table.players = table.players.map(p => (p?.username === username ? null : p));
-      io.to(tableId).emit('table_update', table);
-      return;
-    }
+    const alreadyJoined = table.players.some(p => p?.username === username);
+    if (alreadyJoined) return;
 
-    if (slotIndex < 0 || slotIndex >= 6) return;
-
-    socket.join(tableId);
-    if (table.players.some(p => p?.username === username)) return io.to(tableId).emit('table_update', table);
-
-    if (!table.players[slotIndex]) {
-      table.players[slotIndex] = {username,hand:[],bet:0,status:'waiting',result:''};
+    if (slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
+      table.players[slotIndex] = { username, hand: [], bet: 0, status: 'waiting', result: '' };
+      socket.join(tableId);
       io.to(tableId).emit('table_update', table);
     }
+  });
+
+  socket.on('leave_table', ({ tableId, username }) => {
+    const table = tables[tableId];
+    if (!table) return;
+    table.players = table.players.map(p => (p?.username === username ? null : p));
+    io.to(tableId).emit('table_update', table);
   });
 
   socket.on('place_bet', ({tableId, username, amount}) => {
