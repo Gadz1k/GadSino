@@ -43,6 +43,35 @@ function calculateHand(hand) {
   return total;
 }
 
+// 🟢 Endpoint rejestracji
+app.post('/register', async (req, res) => {
+  const { username, email, password } = req.body;
+  try {
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const user = await User.create({
+      username,
+      email,
+      password: hashedPassword,
+      balance: 1000 // startowe saldo
+    });
+    res.status(201).json({ username: user.username });
+  } catch (error) {
+    res.status(400).json({ message: 'Użytkownik już istnieje lub błąd danych.' });
+  }
+});
+
+// 🔵 Endpoint logowania
+app.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  const user = await User.findOne({ where: { username } });
+  if (!user) return res.status(400).json({ message: 'Użytkownik nie istnieje.' });
+
+  const match = await bcrypt.compare(password, user.password);
+  if (!match) return res.status(400).json({ message: 'Niepoprawne hasło.' });
+
+  res.json({ username: user.username, balance: user.balance });
+});
+
 io.on('connection', socket => {
   console.log('🧠 Nowe połączenie:', socket.id);
 
