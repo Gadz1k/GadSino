@@ -75,6 +75,13 @@ app.post('/login', async (req, res) => {
 io.on('connection', socket => {
   console.log('🧠 Nowe połączenie:', socket.id);
 
+  socket.on('get_table_state', ({ tableId }) => {
+  const table = tables[tableId];
+  if (table) {
+    socket.emit('table_update', table);
+    }
+  });
+
   socket.on('join_table', ({ tableId, username, slotIndex }) => {
     const table = tables[tableId];
     if (!table) return;
