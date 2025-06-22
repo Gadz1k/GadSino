@@ -16,15 +16,19 @@ const io = new Server(server, {
 const port = process.env.PORT || 3000;
 
 function createShoe(decks = 3) {
-  const singleDeck = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+  const ranks = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+  const suits = ['clubs', 'diamonds', 'hearts', 'spades'];
   let shoe = [];
   for (let i = 0; i < decks; i++) {
-    for (let card of singleDeck) {
-      for (let j = 0; j < 4; j++) shoe.push(card);
+    for (let rank of ranks) {
+      for (let suit of suits) {
+        shoe.push({ rank, suit });
+      }
     }
   }
   return shuffle(shoe);
 }
+
 function shuffle(deck) {
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -60,14 +64,15 @@ function drawCard(tableId) {
 }
 
 function cardValue(card) {
-  if (card === 'A') return 11;
-  if (['K', 'Q', 'J'].includes(card)) return 10;
-  return parseInt(card);
+  const rank = card.rank;
+  if (rank === 'A') return 11;
+  if (['K', 'Q', 'J'].includes(rank)) return 10;
+  return parseInt(rank);
 }
 
 function calculateHand(hand) {
   let total = hand.reduce((acc, c) => acc + cardValue(c), 0);
-  let aces = hand.filter(c => c === 'A').length;
+  let aces = hand.filter(c => c.rank === 'A').length;
   while (total > 21 && aces--) total -= 10;
   return total;
 }
@@ -172,7 +177,7 @@ function startRound(tableId) {
   table.players = table.players.map(p =>
     p && p.bet > 0 ? { ...p, hand: [drawCard(tableId), drawCard(tableId)], status: 'playing' } : p ? { ...p, hand: [], status: 'waiting' } : null
   );
-  table.dealerHand = [drawCard(tableId), '❓'];
+  table.dealerHand = [drawCard(tableId), { rank: '❓', suit: null }];
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
   io.to(tableId).emit('round_started', getSafeTable(table));
@@ -197,7 +202,7 @@ function nextTurn(tableId) {
 
 function playDealer(tableId) {
   const table = tables[tableId];
-  if (table.dealerHand[1] === '❓') table.dealerHand[1] = drawCard(tableId);
+  if (table.dealerHand[1].rank === '❓') table.dealerHand[1] = drawCard(tableId);
   let total = calculateHand(table.dealerHand);
   while (total < 17) {
     table.dealerHand.push(drawCard(tableId));
