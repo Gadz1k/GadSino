@@ -1,11 +1,9 @@
 require('dotenv').config();
-
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 
 const sequelize = require('./sequelize');
 const User = require('./models/user');
@@ -15,52 +13,71 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
-
 const port = process.env.PORT || 3000;
+
+function createShoe(decks = 3) {
+  const singleDeck = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+  let shoe = [];
+  for (let i = 0; i < decks; i++) {
+    for (let card of singleDeck) {
+      for (let j = 0; j < 4; j++) shoe.push(card); // 4 suits
+    }
+  }
+  return shuffle(shoe);
+}
+function shuffle(deck) {
+  for (let i = deck.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [deck[i], deck[j]] = [deck[j], deck[i]];
+  }
+  return deck;
+}
 
 let tables = {
   default: {
     players: Array(6).fill(null),
     dealerHand: [],
-    status: 'waiting',
     phase: 'waiting_for_bets',
     currentPlayerIndex: 0,
     countdown: null,
-    countdownValue: 15
+    countdownValue: 15,
+    shoe: createShoe()
   }
 };
 
 app.use(cors());
 app.use(express.json());
 
-function drawCard() {
-  const values = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11];
-  return values[Math.floor(Math.random() * values.length)];
+function drawCard(tableId) {
+  const table = tables[tableId];
+  if (table.shoe.length < 30) table.shoe = createShoe();
+  return table.shoe.pop();
+}
+
+function cardValue(card) {
+  if (card === 'A') return 11;
+  if (['K', 'Q', 'J'].includes(card)) return 10;
+  return parseInt(card);
 }
 
 function calculateHand(hand) {
-  let total = hand.reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0);
-  let aces = hand.filter(c => c === 11).length;
-  while (total > 21 && aces > 0) {
-    total -= 10;
-    aces--;
-  }
+  let total = hand.reduce((acc, c) => acc + cardValue(c), 0);
+  let aces = hand.filter(c => c === 'A').length;
+  while (total > 21 && aces--) total -= 10;
   return total;
 }
 
-// 🟢 Rejestracja
 app.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await User.create({ username, email, password: hashedPassword, balance: 1000 });
     res.status(201).json({ username: user.username });
-  } catch (err) {
+  } catch {
     res.status(400).json({ message: 'Użytkownik już istnieje lub błąd danych.' });
   }
 });
 
-// 🔵 Logowanie
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   const user = await User.findOne({ where: { username } });
@@ -71,8 +88,6 @@ app.post('/login', async (req, res) => {
 });
 
 io.on('connection', socket => {
-  console.log('🧠 Nowe połączenie:', socket.id);
-
   socket.on('get_table_state', ({ tableId }) => {
     const table = tables[tableId];
     if (table) socket.emit('table_update', table);
@@ -81,10 +96,7 @@ io.on('connection', socket => {
   socket.on('join_table', ({ tableId, username, slotIndex }) => {
     const table = tables[tableId];
     if (!table) return;
-
-    const alreadyJoined = table.players.some(p => p?.username === username);
-    if (alreadyJoined) return;
-
+    if (table.players.some(p => p?.username === username)) return;
     if (slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
       table.players[slotIndex] = { username, hand: [], bet: 0, status: 'waiting', result: '' };
       socket.join(tableId);
@@ -102,28 +114,23 @@ io.on('connection', socket => {
   socket.on('place_bet', ({ tableId, username, amount }) => {
     const table = tables[tableId];
     if (!table || table.phase !== 'waiting_for_bets') return;
-
     const player = table.players.find(p => p && p.username === username);
     if (!player) return;
 
     User.findOne({ where: { username } }).then(user => {
       if (!user || user.balance < amount) return;
-
       player.bet = amount;
       player.status = 'bet_placed';
       user.balance -= amount;
       user.save();
-
       io.to(tableId).emit('table_update', table);
 
-      // jeśli to pierwszy zakład, startujemy countdown
       const activeCount = table.players.filter(p => p && p.bet > 0).length;
       if (activeCount === 1 && !table.countdown) {
         table.countdownValue = 15;
         table.countdown = setInterval(() => {
           table.countdownValue--;
           io.to(tableId).emit('countdown_tick', table.countdownValue);
-
           if (table.countdownValue <= 0) {
             clearInterval(table.countdown);
             table.countdown = null;
@@ -140,7 +147,7 @@ io.on('connection', socket => {
     if (!current || current.username !== username) return;
 
     if (action === 'hit') {
-      current.hand.push(drawCard());
+      current.hand.push(drawCard(tableId));
       io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
       if (calculateHand(current.hand) > 21) {
         current.status = 'bust';
@@ -156,11 +163,10 @@ io.on('connection', socket => {
 
 function startRound(tableId) {
   const table = tables[tableId];
-  const playersIn = table.players.map(p =>
-    p && p.bet > 0 ? { ...p, hand: [drawCard(), drawCard()], status: 'playing' } : p ? { ...p, hand: [], status: 'waiting' } : null
+  table.players = table.players.map(p =>
+    p && p.bet > 0 ? { ...p, hand: [drawCard(tableId), drawCard(tableId)], status: 'playing' } : p ? { ...p, hand: [], status: 'waiting' } : null
   );
-  table.players = playersIn;
-  table.dealerHand = [drawCard(), '❓'];
+  table.dealerHand = [drawCard(tableId), '❓'];
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
   io.to(tableId).emit('round_started', table);
@@ -185,37 +191,28 @@ function nextTurn(tableId) {
 
 function playDealer(tableId) {
   const table = tables[tableId];
-  if (table.dealerHand[1] === '❓') table.dealerHand[1] = drawCard();
+  if (table.dealerHand[1] === '❓') table.dealerHand[1] = drawCard(tableId);
   let total = calculateHand(table.dealerHand);
   while (total < 17) {
-    table.dealerHand.push(drawCard());
+    table.dealerHand.push(drawCard(tableId));
     total = calculateHand(table.dealerHand);
   }
 
   table.players.forEach(p => {
     if (!p || p.bet === 0) return;
     const playerTotal = calculateHand(p.hand);
-    if (playerTotal > 21) {
-      p.result = 'Przegrana';
-    } else if (total > 21 || playerTotal > total) {
+    if (playerTotal > 21) p.result = 'Przegrana';
+    else if (total > 21 || playerTotal > total) {
       p.result = 'Wygrana';
       User.findOne({ where: { username: p.username } }).then(user => {
-        if (user) {
-          user.balance += p.bet * 2;
-          user.save();
-        }
+        if (user) { user.balance += p.bet * 2; user.save(); }
       });
     } else if (playerTotal === total) {
       p.result = 'Remis';
       User.findOne({ where: { username: p.username } }).then(user => {
-        if (user) {
-          user.balance += p.bet;
-          user.save();
-        }
+        if (user) { user.balance += p.bet; user.save(); }
       });
-    } else {
-      p.result = 'Przegrana';
-    }
+    } else p.result = 'Przegrana';
   });
 
   io.to(tableId).emit('round_result', table);
@@ -245,7 +242,7 @@ app.get('/users', async (req, res) => {
       attributes: ['id', 'username', 'email', 'balance', 'createdAt']
     });
     res.json(users);
-  } catch (error) {
+  } catch {
     res.status(500).json({ message: 'Błąd podczas pobierania użytkowników.' });
   }
 });
