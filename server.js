@@ -189,6 +189,17 @@ app.get('/player/:username',async(req,res)=>{
   res.json({balance:user.balance});
 });
 
+app.get('/users', async (req, res) => {
+  try {
+    const users = await User.findAll({
+      attributes: ['id', 'username', 'email', 'balance', 'createdAt']
+    });
+    res.json(users);
+  } catch (error) {
+    res.status(500).json({ message: 'Błąd podczas pobierania użytkowników.' });
+  }
+});
+
 sequelize.sync().then(()=>{
   server.listen(port,()=>console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
 }).catch(err=>console.error('Błąd bazy danych:',err));
