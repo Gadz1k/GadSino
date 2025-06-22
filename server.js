@@ -1,9 +1,14 @@
-// 📦 Express + Socket.IO backend for Karol's Kasyno Blackjack – Multiplayer Realtime Edition
+require('dotenv').config();  // dodaj na górze, żeby czytać .env
 
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
+const sequelize = require('./sequelize'); // twoja konfiguracja Sequelize
+const User = require('./user'); // model User
 
 const app = express();
 const server = http.createServer(app);
@@ -14,9 +19,9 @@ const io = new Server(server, {
   }
 });
 
-const port = 3000;
+const port = process.env.PORT || 3000;
 
-let players = {}; // { username: { balance, history } }
+// Tablice i funkcje z gry (bez zmian)
 let tables = {
   default: {
     players: Array(6).fill(null),
@@ -30,6 +35,7 @@ let tables = {
 app.use(cors());
 app.use(express.json());
 
+// Funkcje do blackjacka (bez zmian)
 function drawCard() {
   const values = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11];
   return values[Math.floor(Math.random() * values.length)];
@@ -45,34 +51,83 @@ function calculateHand(hand) {
   return total;
 }
 
-app.post('/register', (req, res) => {
-  const { username } = req.body;
-  if (players[username]) return res.status(400).json({ message: 'Użytkownik już istnieje.' });
-  players[username] = { balance: 1000, history: [] };
-  res.json({ message: `Zarejestrowano gracza ${username}`, balance: 1000 });
+// REJESTRACJA
+app.post('/register', async (req, res) => {
+  const { username, email, password } = req.body;
+
+  if (!username || !email || !password) {
+    return res.status(400).json({ message: 'Wypełnij wszystkie pola.' });
+  }
+
+  try {
+    // Sprawdź czy istnieje użytkownik o takim emailu
+    const existingUser = await User.findOne({ where: { email } });
+    if (existingUser) {
+      return res.status(400).json({ message: 'Użytkownik z tym emailem już istnieje.' });
+    }
+
+    // Hashuj hasło
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Twórz użytkownika
+    const newUser = await User.create({
+      username,
+      email,
+      password: hashedPassword,
+      balance: 1000  // domyślne saldo
+    });
+
+    res.json({ message: 'Zarejestrowano pomyślnie.', userId: newUser.id });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
 });
 
-app.post('/join-table', (req, res) => {
-  const { username, tableId, slot } = req.body;
-  const player = players[username];
-  const table = tables[tableId];
+// LOGOWANIE
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
 
-  if (!player) return res.status(404).json({ message: 'Gracz nie istnieje.' });
-  if (!table) return res.status(404).json({ message: 'Stół nie istnieje.' });
-  if (slot < 0 || slot >= 6) return res.status(400).json({ message: 'Nieprawidłowy slot.' });
-  if (table.players[slot]) return res.status(400).json({ message: 'Slot zajęty.' });
-  if (table.players.some(p => p && p.username === username)) return res.status(400).json({ message: 'Już jesteś przy tym stole.' });
+  if (!email || !password) return res.status(400).json({ message: 'Podaj email i hasło.' });
 
-  table.players[slot] = { username, hand: [], bet: 0, status: 'waiting', slot };
-  io.to(tableId).emit('table_update', table);
-  res.json({ message: `Dołączono do stołu ${tableId}`, players: table.players.filter(p => p).map(p => p.username) });
+  try {
+    const user = await User.findOne({ where: { email } });
+    if (!user) return res.status(400).json({ message: 'Nieprawidłowy email lub hasło.' });
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) return res.status(400).json({ message: 'Nieprawidłowy email lub hasło.' });
+
+    // Tworzymy token JWT
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    res.json({ message: 'Zalogowano pomyślnie.', token, username: user.username, balance: user.balance });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
 });
 
-app.get('/player/:username', (req, res) => {
-  const player = players[req.params.username];
-  if (!player) return res.status(404).json({ message: 'Nie znaleziono gracza.' });
-  res.json(player);
+// Endpoint do pobrania danych o graczu po username (już w bazie)
+app.get('/player/:username', async (req, res) => {
+  try {
+    const user = await User.findOne({ where: { username: req.params.username } });
+    if (!user) return res.status(404).json({ message: 'Nie znaleziono gracza.' });
+
+    res.json({ username: user.username, balance: user.balance });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
 });
+
+// --- Kod z blackjacka, socket.io i reszta gry ---
 
 io.on('connection', (socket) => {
   console.log('🧠 Nowe połączenie:', socket.id);
@@ -88,17 +143,25 @@ io.on('connection', (socket) => {
   socket.on('place_bet', ({ tableId, username, amount }) => {
     const table = tables[tableId];
     const player = table.players.find(p => p && p.username === username);
-    if (!player || players[username].balance < amount) return;
+    if (!player) return;
 
-    player.bet = amount;
-    player.status = 'bet_placed';
-    players[username].balance -= amount;
+    // Pobierz saldo z bazy
+    User.findOne({ where: { username } }).then(user => {
+      if (!user || user.balance < amount) return;
 
-    if (table.players.every(p => !p || p.bet > 0 || p.status === 'waiting')) {
-      startRound(tableId);
-    } else {
-      io.to(tableId).emit('table_update', table);
-    }
+      player.bet = amount;
+      player.status = 'bet_placed';
+
+      // Aktualizuj saldo w bazie
+      user.balance -= amount;
+      user.save();
+
+      if (table.players.every(p => !p || p.bet > 0 || p.status === 'waiting')) {
+        startRound(tableId);
+      } else {
+        io.to(tableId).emit('table_update', table);
+      }
+    });
   });
 
   socket.on('player_action', ({ tableId, username, action }) => {
@@ -124,6 +187,10 @@ io.on('connection', (socket) => {
     }
   });
 });
+
+//... dalej funkcje startRound, promptNextPlayer, nextTurn, playDealer, resetTable bez zmian (dodaj jak miałeś wcześniej) ...
+
+// Reszta kodu z blackjacka tutaj (żeby nie było niedomówień):
 
 function startRound(tableId) {
   const table = tables[tableId];
@@ -183,10 +250,21 @@ function playDealer(tableId) {
       p.result = 'Przegrana';
     } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
       p.result = 'Wygrana';
-      players[p.username].balance += p.bet * 2;
+      // Aktualizacja salda w bazie:
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet * 2;
+          user.save();
+        }
+      });
     } else if (playerTotal === dealerTotal) {
       p.result = 'Remis';
-      players[p.username].balance += p.bet;
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+        }
+      });
     } else {
       p.result = 'Przegrana';
     }
