@@ -79,7 +79,7 @@ app.post('/register', async (req, res) => {
   }
 });
 
-// POPRAWIONE LOGOWANIE (username lub email)
+// LOGOWANIE
 app.post('/login', async (req, res) => {
   const { username, email, password } = req.body;
 
@@ -126,15 +126,29 @@ app.get('/player/:username', async (req, res) => {
   }
 });
 
+// SOCKET.IO
 io.on('connection', (socket) => {
   console.log('🧠 Nowe połączenie:', socket.id);
 
-  socket.on('join_table', ({ tableId, username }) => {
+  socket.on('join_table', ({ tableId, username, slotIndex }) => {
     socket.join(tableId);
     const table = tables[tableId];
-    if (table) {
-      io.to(tableId).emit('table_update', table);
+    if (!table) return;
+
+    const existingSlot = table.players.find(p => p && p.username === username);
+    if (existingSlot) return io.to(tableId).emit('table_update', table);
+
+    if (typeof slotIndex === 'number' && slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
+      table.players[slotIndex] = {
+        username,
+        hand: [],
+        bet: 0,
+        status: 'waiting',
+        result: ''
+      };
     }
+
+    io.to(tableId).emit('table_update', table);
   });
 
   socket.on('place_bet', ({ tableId, username, amount }) => {
