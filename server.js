@@ -2,7 +2,6 @@
 
 const express = require('express');
 const cors = require('cors');
-const { v4: uuidv4 } = require('uuid');
 const http = require('http');
 const { Server } = require('socket.io');
 
@@ -18,7 +17,15 @@ const io = new Server(server, {
 const port = 3000;
 
 let players = {}; // { username: { balance, history } }
-let tables = {};  // { tableId: { players, dealerHand, status, phase, currentPlayerIndex } }
+let tables = {
+  default: {
+    players: Array(6).fill(null),
+    dealerHand: [],
+    status: 'waiting',
+    phase: 'waiting_for_players',
+    currentPlayerIndex: 0
+  }
+};
 
 app.use(cors());
 app.use(express.json());
@@ -45,31 +52,20 @@ app.post('/register', (req, res) => {
   res.json({ message: `Zarejestrowano gracza ${username}`, balance: 1000 });
 });
 
-app.post('/create-table', (req, res) => {
-  const tableId = uuidv4();
-  tables[tableId] = {
-    players: [],
-    dealerHand: [],
-    status: 'waiting',
-    phase: 'waiting_for_players',
-    currentPlayerIndex: 0
-  };
-  res.json({ tableId });
-});
-
 app.post('/join-table', (req, res) => {
-  const { username, tableId } = req.body;
+  const { username, tableId, slot } = req.body;
   const player = players[username];
   const table = tables[tableId];
 
   if (!player) return res.status(404).json({ message: 'Gracz nie istnieje.' });
   if (!table) return res.status(404).json({ message: 'Stół nie istnieje.' });
-  if (table.players.find(p => p.username === username)) return res.status(400).json({ message: 'Już jesteś przy tym stole.' });
-  if (table.players.length >= 6) return res.status(400).json({ message: 'Stół pełny.' });
+  if (slot < 0 || slot >= 6) return res.status(400).json({ message: 'Nieprawidłowy slot.' });
+  if (table.players[slot]) return res.status(400).json({ message: 'Slot zajęty.' });
+  if (table.players.some(p => p && p.username === username)) return res.status(400).json({ message: 'Już jesteś przy tym stole.' });
 
-  table.players.push({ username, hand: [], bet: 0, status: 'waiting' });
+  table.players[slot] = { username, hand: [], bet: 0, status: 'waiting', slot };
   io.to(tableId).emit('table_update', table);
-  res.json({ message: `Dołączono do stołu ${tableId}`, players: table.players.map(p => p.username) });
+  res.json({ message: `Dołączono do stołu ${tableId}`, players: table.players.filter(p => p).map(p => p.username) });
 });
 
 app.get('/player/:username', (req, res) => {
@@ -91,14 +87,14 @@ io.on('connection', (socket) => {
 
   socket.on('place_bet', ({ tableId, username, amount }) => {
     const table = tables[tableId];
-    const player = table.players.find(p => p.username === username);
+    const player = table.players.find(p => p && p.username === username);
     if (!player || players[username].balance < amount) return;
 
     player.bet = amount;
     player.status = 'bet_placed';
     players[username].balance -= amount;
 
-    if (table.players.every(p => p.bet > 0)) {
+    if (table.players.every(p => !p || p.bet > 0 || p.status === 'waiting')) {
       startRound(tableId);
     } else {
       io.to(tableId).emit('table_update', table);
@@ -112,12 +108,10 @@ io.on('connection', (socket) => {
 
     if (action === 'hit') {
       current.hand.push(drawCard());
-    
       io.to(tableId).emit('player_updated', {
         username: current.username,
         hand: current.hand
       });
-    
       io.to(tableId).emit('table_update', table);
 
       if (calculateHand(current.hand) > 21) {
@@ -133,10 +127,12 @@ io.on('connection', (socket) => {
 
 function startRound(tableId) {
   const table = tables[tableId];
-  table.dealerHand = [drawCard(), '?']; // Ukryj drugą kartę na początku
+  table.dealerHand = [drawCard(), '?'];
   table.players.forEach(p => {
-    p.hand = [drawCard(), drawCard()];
-    p.status = 'playing';
+    if (p) {
+      p.hand = [drawCard(), drawCard()];
+      p.status = 'playing';
+    }
   });
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
@@ -146,27 +142,31 @@ function startRound(tableId) {
 
 function promptNextPlayer(tableId) {
   const table = tables[tableId];
-  const player = table.players[table.currentPlayerIndex];
-  if (!player) return;
-  io.to(tableId).emit('your_turn', player.username);
+  let currentIndex = table.currentPlayerIndex;
+
+  while (currentIndex < table.players.length && (!table.players[currentIndex] || table.players[currentIndex].status !== 'playing')) {
+    currentIndex++;
+  }
+  table.currentPlayerIndex = currentIndex;
+
+  const player = table.players[currentIndex];
+  if (!player) {
+    playDealer(tableId);
+  } else {
+    io.to(tableId).emit('your_turn', player.username);
+  }
 }
 
 function nextTurn(tableId) {
   const table = tables[tableId];
   table.currentPlayerIndex++;
-
-  if (table.currentPlayerIndex >= table.players.length) {
-    playDealer(tableId);
-  } else {
-    promptNextPlayer(tableId);
-  }
+  promptNextPlayer(tableId);
 }
 
 function playDealer(tableId) {
   const table = tables[tableId];
-
   if (table.dealerHand[1] === '?') {
-    table.dealerHand[1] = drawCard(); // Odkryj drugą kartę
+    table.dealerHand[1] = drawCard();
   }
 
   let total = calculateHand(table.dealerHand);
@@ -176,6 +176,7 @@ function playDealer(tableId) {
   }
 
   table.players.forEach(p => {
+    if (!p) return;
     const playerTotal = calculateHand(p.hand);
     const dealerTotal = total;
     if (playerTotal > 21) {
@@ -192,19 +193,15 @@ function playDealer(tableId) {
   });
 
   io.to(tableId).emit('round_result', table);
-
-  setTimeout(() => {
-    resetTable(tableId);
-  }, 8000);
+  setTimeout(() => resetTable(tableId), 8000);
 }
 
 function resetTable(tableId) {
   const table = tables[tableId];
-  table.players.forEach(p => {
-    p.hand = [];
-    p.bet = 0;
-    p.status = 'waiting';
-    p.result = '';
+  table.players.forEach((p, i) => {
+    if (p) {
+      table.players[i] = { ...p, hand: [], bet: 0, status: 'waiting', result: '' };
+    }
   });
   table.dealerHand = [];
   table.phase = 'waiting_for_bets';
