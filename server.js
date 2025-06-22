@@ -129,8 +129,10 @@ io.on('connection', socket => {
       if (activeCount === 1 && !table.countdown) {
         table.countdownValue = 15;
         table.countdown = setInterval(() => {
+          if (!tables[tableId]) return clearInterval(table.countdown);
           table.countdownValue--;
           io.to(tableId).emit('countdown_tick', table.countdownValue);
+
           if (table.countdownValue <= 0) {
             clearInterval(table.countdown);
             table.countdown = null;
