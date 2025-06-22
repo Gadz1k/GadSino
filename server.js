@@ -287,6 +287,19 @@ function resetTable(tableId) {
   io.to(tableId).emit('table_update', table);
 }
 
+// DEBUG: Zwróć wszystkich użytkowników (TYLKO DO TESTÓW)
+app.get('/users', async (req, res) => {
+  try {
+    const users = await User.findAll({
+      attributes: ['id', 'username', 'email', 'balance', 'createdAt']
+    });
+    res.json(users);
+  } catch (err) {
+    console.error('Błąd pobierania użytkowników:', err);
+    res.status(500).json({ message: 'Błąd serwera.' });
+  }
+});
+
 sequelize.sync().then(() => {
   server.listen(port, () => {
     console.log(`🃏 Kasyno Blackjack Multiplayer działa na http://localhost:${port}`);
