@@ -23,7 +23,7 @@ let tables = {
     players: Array(6).fill(null),
     dealerHand: [],
     status: 'waiting',
-    phase: 'waiting_for_players',
+    phase: 'waiting_for_bets',
     currentPlayerIndex: 0
   }
 };
@@ -52,7 +52,7 @@ app.post('/register', async (req, res) => {
       username,
       email,
       password: hashedPassword,
-      balance: 1000 // startowe saldo
+      balance: 1000
     });
     res.status(201).json({ username: user.username });
   } catch (error) {
@@ -76,9 +76,9 @@ io.on('connection', socket => {
   console.log('🧠 Nowe połączenie:', socket.id);
 
   socket.on('get_table_state', ({ tableId }) => {
-  const table = tables[tableId];
-  if (table) {
-    socket.emit('table_update', table);
+    const table = tables[tableId];
+    if (table) {
+      socket.emit('table_update', table);
     }
   });
 
@@ -103,20 +103,23 @@ io.on('connection', socket => {
     io.to(tableId).emit('table_update', table);
   });
 
-  socket.on('place_bet', ({tableId, username, amount}) => {
+  socket.on('place_bet', ({ tableId, username, amount }) => {
     const table = tables[tableId];
-    const player = table.players.find(p=>p&&p.username===username);
+    if (!table || table.phase !== 'waiting_for_bets') return;
+
+    const player = table.players.find(p => p && p.username === username);
     if (!player) return;
 
-    User.findOne({where:{username}}).then(user=>{
-      if (!user||user.balance<amount) return;
+    User.findOne({ where: { username } }).then(user => {
+      if (!user || user.balance < amount) return;
 
       player.bet = amount;
-      player.status='bet_placed';
-      user.balance-=amount;
+      player.status = 'bet_placed';
+      user.balance -= amount;
       user.save();
 
-      if (table.players.every(p=>!p||p.bet>0||p.status==='waiting')) {
+      const activePlayers = table.players.filter(p => p && p.bet > 0);
+      if (activePlayers.length >= 1 && table.players.every(p => !p || p.bet > 0 || p.status === 'waiting')) {
         startRound(tableId);
       } else {
         io.to(tableId).emit('table_update', table);
@@ -124,76 +127,110 @@ io.on('connection', socket => {
     });
   });
 
-  socket.on('player_action', ({tableId, username, action}) => {
+  socket.on('player_action', ({ tableId, username, action }) => {
     const table = tables[tableId];
     const current = table.players[table.currentPlayerIndex];
-    if (!current||current.username!==username) return;
+    if (!current || current.username !== username) return;
 
-    if (action==='hit') {
+    if (action === 'hit') {
       current.hand.push(drawCard());
-      io.to(tableId).emit('player_updated',{username:current.username,hand:current.hand});
-      if (calculateHand(current.hand)>21){current.status='bust';nextTurn(tableId);}
-    } else if (action==='stand') {
-      current.status='stand';nextTurn(tableId);
+      io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+      if (calculateHand(current.hand) > 21) {
+        current.status = 'bust';
+        nextTurn(tableId);
+      }
+    } else if (action === 'stand') {
+      current.status = 'stand';
+      nextTurn(tableId);
     }
     io.to(tableId).emit('table_update', table);
   });
 });
 
-function startRound(tableId){
-  const table=tables[tableId];
-  table.dealerHand=[drawCard(),'❓'];
-  table.players.forEach(p=>{if(p){p.hand=[drawCard(),drawCard()];p.status='playing';}});
-  table.phase='playing';table.currentPlayerIndex=0;
-  io.to(tableId).emit('round_started',table);
+function startRound(tableId) {
+  const table = tables[tableId];
+  table.dealerHand = [drawCard(), '❓'];
+  table.players.forEach(p => {
+    if (p) {
+      p.hand = [drawCard(), drawCard()];
+      p.status = 'playing';
+    }
+  });
+  table.phase = 'playing';
+  table.currentPlayerIndex = 0;
+  io.to(tableId).emit('round_started', table);
   promptNextPlayer(tableId);
 }
 
-function promptNextPlayer(tableId){
-  const table=tables[tableId];let idx=table.currentPlayerIndex;
-  while(idx<table.players.length&&(!table.players[idx]||table.players[idx].status!=='playing')) idx++;
-  if(idx>=table.players.length){playDealer(tableId);}else{
-    table.currentPlayerIndex=idx;io.to(tableId).emit('your_turn',table.players[idx].username);
+function promptNextPlayer(tableId) {
+  const table = tables[tableId];
+  let idx = table.currentPlayerIndex;
+  while (idx < table.players.length && (!table.players[idx] || table.players[idx].status !== 'playing')) idx++;
+  if (idx >= table.players.length) {
+    playDealer(tableId);
+  } else {
+    table.currentPlayerIndex = idx;
+    io.to(tableId).emit('your_turn', table.players[idx].username);
   }
 }
 
-function nextTurn(tableId){
-  tables[tableId].currentPlayerIndex++;promptNextPlayer(tableId);
+function nextTurn(tableId) {
+  tables[tableId].currentPlayerIndex++;
+  promptNextPlayer(tableId);
 }
 
-function playDealer(tableId){
-  const table=tables[tableId];
-  if(table.dealerHand[1]==='❓')table.dealerHand[1]=drawCard();
-  let total=calculateHand(table.dealerHand);
-  while(total<17){table.dealerHand.push(drawCard());total=calculateHand(table.dealerHand);}
+function playDealer(tableId) {
+  const table = tables[tableId];
+  if (table.dealerHand[1] === '❓') table.dealerHand[1] = drawCard();
+  let total = calculateHand(table.dealerHand);
+  while (total < 17) {
+    table.dealerHand.push(drawCard());
+    total = calculateHand(table.dealerHand);
+  }
 
-  table.players.forEach(p=>{
-    if(!p)return;const playerTotal=calculateHand(p.hand);
-    if(playerTotal>21){p.result='Przegrana';}
-    else if(total>21||playerTotal>total){
-      p.result='Wygrana';
-      User.findOne({where:{username:p.username}}).then(user=>{if(user){user.balance+=p.bet*2;user.save();}});
-    } else if(playerTotal===total){
-      p.result='Remis';
-      User.findOne({where:{username:p.username}}).then(user=>{if(user){user.balance+=p.bet;user.save();}});
-    }else{p.result='Przegrana';}
+  table.players.forEach(p => {
+    if (!p) return;
+    const playerTotal = calculateHand(p.hand);
+    if (playerTotal > 21) {
+      p.result = 'Przegrana';
+    } else if (total > 21 || playerTotal > total) {
+      p.result = 'Wygrana';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet * 2;
+          user.save();
+        }
+      });
+    } else if (playerTotal === total) {
+      p.result = 'Remis';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+        }
+      });
+    } else {
+      p.result = 'Przegrana';
+    }
   });
 
-  io.to(tableId).emit('round_result',table);
-  setTimeout(()=>resetTable(tableId),8000);
+  io.to(tableId).emit('round_result', table);
+  setTimeout(() => resetTable(tableId), 8000);
 }
 
-function resetTable(tableId){
-  const table=tables[tableId];
-  table.players=table.players.map(p=>p?{...p,hand:[],bet:0,status:'waiting',result:''}:null);
-  table.dealerHand=[];table.phase='waiting_for_bets';table.currentPlayerIndex=0;
-  io.to(tableId).emit('table_update',table);
+function resetTable(tableId) {
+  const table = tables[tableId];
+  table.players = table.players.map(p => p ? { ...p, hand: [], bet: 0, status: 'waiting', result: '' } : null);
+  table.dealerHand = [];
+  table.phase = 'waiting_for_bets';
+  table.currentPlayerIndex = 0;
+  io.to(tableId).emit('table_update', table);
 }
 
-app.get('/player/:username',async(req,res)=>{
-  const user=await User.findOne({where:{username:req.params.username}});
-  if(!user)return res.status(404).json({balance:0});
-  res.json({balance:user.balance});
+app.get('/player/:username', async (req, res) => {
+  const user = await User.findOne({ where: { username: req.params.username } });
+  if (!user) return res.status(404).json({ balance: 0 });
+  res.json({ balance: user.balance });
 });
 
 app.get('/users', async (req, res) => {
@@ -207,6 +244,6 @@ app.get('/users', async (req, res) => {
   }
 });
 
-sequelize.sync().then(()=>{
-  server.listen(port,()=>console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
-}).catch(err=>console.error('Błąd bazy danych:',err));
+sequelize.sync().then(() => {
+  server.listen(port, () => console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
+}).catch(err => console.error('Błąd bazy danych:', err));
