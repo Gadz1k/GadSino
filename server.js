@@ -24,49 +24,64 @@ let tables = {
     dealerHand: [],
     status: 'waiting',
     phase: 'waiting_for_bets',
-    currentPlayerIndex: 0,
-    countdown: null,
-    countdownValue: 15
+    currentPlayerIndex: 0
   }
 };
+
+function getSafeTable(table) {
+  return {
+    dealerHand: [...table.dealerHand],
+    phase: table.phase,
+    currentPlayerIndex: table.currentPlayerIndex,
+    players: table.players.map(p => p ? {
+      username: p.username,
+      hand: [...p.hand],
+      bet: p.bet,
+      status: p.status,
+      result: p.result
+    } : null)
+  };
+}
 
 app.use(cors());
 app.use(express.json());
 
 function drawCard() {
-  const values = [2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 10, 11];
-  return values[Math.floor(Math.random() * values.length)];
+  const values = [2,3,4,5,6,7,8,9,10,10,10,10,11];
+  return values[Math.floor(Math.random()*values.length)];
 }
 
 function calculateHand(hand) {
-  let total = hand.reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0);
-  let aces = hand.filter(c => c === 11).length;
-  while (total > 21 && aces > 0) {
-    total -= 10;
-    aces--;
-  }
+  let total = hand.reduce((a,b)=>a+(typeof b==='number'?b:0),0);
+  let aces = hand.filter(c=>c===11).length;
+  while(total>21 && aces>0){total-=10;aces--;}
   return total;
 }
 
-// 🟢 Rejestracja
 app.post('/register', async (req, res) => {
   const { username, email, password } = req.body;
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await User.create({ username, email, password: hashedPassword, balance: 1000 });
+    const user = await User.create({
+      username,
+      email,
+      password: hashedPassword,
+      balance: 1000
+    });
     res.status(201).json({ username: user.username });
-  } catch (err) {
+  } catch (error) {
     res.status(400).json({ message: 'Użytkownik już istnieje lub błąd danych.' });
   }
 });
 
-// 🔵 Logowanie
 app.post('/login', async (req, res) => {
   const { username, password } = req.body;
   const user = await User.findOne({ where: { username } });
   if (!user) return res.status(400).json({ message: 'Użytkownik nie istnieje.' });
+
   const match = await bcrypt.compare(password, user.password);
   if (!match) return res.status(400).json({ message: 'Niepoprawne hasło.' });
+
   res.json({ username: user.username, balance: user.balance });
 });
 
@@ -75,7 +90,9 @@ io.on('connection', socket => {
 
   socket.on('get_table_state', ({ tableId }) => {
     const table = tables[tableId];
-    if (table) socket.emit('table_update', table);
+    if (table) {
+      socket.emit('table_update', getSafeTable(table));
+    }
   });
 
   socket.on('join_table', ({ tableId, username, slotIndex }) => {
@@ -88,7 +105,7 @@ io.on('connection', socket => {
     if (slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
       table.players[slotIndex] = { username, hand: [], bet: 0, status: 'waiting', result: '' };
       socket.join(tableId);
-      io.to(tableId).emit('table_update', table);
+      io.to(tableId).emit('table_update', getSafeTable(table));
     }
   });
 
@@ -96,7 +113,7 @@ io.on('connection', socket => {
     const table = tables[tableId];
     if (!table) return;
     table.players = table.players.map(p => (p?.username === username ? null : p));
-    io.to(tableId).emit('table_update', table);
+    io.to(tableId).emit('table_update', getSafeTable(table));
   });
 
   socket.on('place_bet', ({ tableId, username, amount }) => {
@@ -114,22 +131,11 @@ io.on('connection', socket => {
       user.balance -= amount;
       user.save();
 
-      io.to(tableId).emit('table_update', table);
-
-      // jeśli to pierwszy zakład, startujemy countdown
-      const activeCount = table.players.filter(p => p && p.bet > 0).length;
-      if (activeCount === 1 && !table.countdown) {
-        table.countdownValue = 15;
-        table.countdown = setInterval(() => {
-          table.countdownValue--;
-          io.to(tableId).emit('countdown_tick', table.countdownValue);
-
-          if (table.countdownValue <= 0) {
-            clearInterval(table.countdown);
-            table.countdown = null;
-            startRound(tableId);
-          }
-        }, 1000);
+      const activePlayers = table.players.filter(p => p && p.bet > 0);
+      if (activePlayers.length >= 1 && table.players.every(p => !p || p.bet > 0 || p.status === 'waiting')) {
+        startRound(tableId);
+      } else {
+        io.to(tableId).emit('table_update', getSafeTable(table));
       }
     });
   });
@@ -150,20 +156,24 @@ io.on('connection', socket => {
       current.status = 'stand';
       nextTurn(tableId);
     }
-    io.to(tableId).emit('table_update', table);
+    io.to(tableId).emit('table_update', getSafeTable(table));
   });
 });
 
 function startRound(tableId) {
   const table = tables[tableId];
-  const playersIn = table.players.map(p =>
-    p && p.bet > 0 ? { ...p, hand: [drawCard(), drawCard()], status: 'playing' } : p ? { ...p, hand: [], status: 'waiting' } : null
-  );
-  table.players = playersIn;
   table.dealerHand = [drawCard(), '❓'];
+  table.players.forEach(p => {
+    if (p && p.bet > 0) {
+      p.hand = [drawCard(), drawCard()];
+      p.status = 'playing';
+    } else if (p) {
+      p.status = 'waiting';
+    }
+  });
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
-  io.to(tableId).emit('round_started', table);
+  io.to(tableId).emit('round_started', getSafeTable(table));
   promptNextPlayer(tableId);
 }
 
@@ -171,8 +181,9 @@ function promptNextPlayer(tableId) {
   const table = tables[tableId];
   let idx = table.currentPlayerIndex;
   while (idx < table.players.length && (!table.players[idx] || table.players[idx].status !== 'playing')) idx++;
-  if (idx >= table.players.length) playDealer(tableId);
-  else {
+  if (idx >= table.players.length) {
+    playDealer(tableId);
+  } else {
     table.currentPlayerIndex = idx;
     io.to(tableId).emit('your_turn', table.players[idx].username);
   }
@@ -218,7 +229,7 @@ function playDealer(tableId) {
     }
   });
 
-  io.to(tableId).emit('round_result', table);
+  io.to(tableId).emit('round_result', getSafeTable(table));
   setTimeout(() => resetTable(tableId), 8000);
 }
 
@@ -228,9 +239,7 @@ function resetTable(tableId) {
   table.dealerHand = [];
   table.phase = 'waiting_for_bets';
   table.currentPlayerIndex = 0;
-  table.countdown = null;
-  table.countdownValue = 15;
-  io.to(tableId).emit('table_update', table);
+  io.to(tableId).emit('table_update', getSafeTable(table));
 }
 
 app.get('/player/:username', async (req, res) => {
