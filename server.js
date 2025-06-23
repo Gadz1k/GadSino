@@ -209,7 +209,10 @@ function nextTurn(tableId) {
 
 function playDealer(tableId) {
   const table = tables[tableId];
-  if (table.dealerHand[1].rank === '❓') table.dealerHand[1] = drawCard(tableId);
+  if (table.dealerHand.length > 1 && table.dealerHand[1].rank === '❓') {
+    table.dealerHand[1] = drawCard(tableId);
+    io.to(tableId).emit('table_update', getSafeTable(table)); // 🔥 to aktualizuje widok
+  }
   let total = calculateHand(table.dealerHand);
   while (total < 17) {
     table.dealerHand.push(drawCard(tableId));
