@@ -129,10 +129,17 @@ io.on('connection', socket => {
 
     User.findOne({ where: { username } }).then(user => {
       if (!user || user.balance < amount) return;
-      player.bet = amount;
-      player.status = 'bet_placed';
+
+      // Sumujemy zakład zamiast nadpisywać
+      player.bet += amount;
       user.balance -= amount;
       user.save();
+
+      // Status ustawiamy tylko raz
+      if (player.status !== 'bet_placed') {
+        player.status = 'bet_placed';
+      }
+
       io.to(tableId).emit('table_update', getSafeTable(table));
 
       const activeCount = table.players.filter(p => p && p.bet > 0).length;
