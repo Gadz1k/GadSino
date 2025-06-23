@@ -44,7 +44,7 @@ function getSafeTable(table) {
 
 let tables = {
   default: {
-    players: Array(6).fill(null),
+    players: Array(5).fill(null),
     dealerHand: [],
     phase: 'waiting_for_bets',
     currentPlayerIndex: 0,
