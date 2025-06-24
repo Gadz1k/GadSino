@@ -211,29 +211,59 @@ function playDealer(tableId) {
   const table = tables[tableId];
   if (table.dealerHand.length > 1 && table.dealerHand[1].rank === '❓') {
     table.dealerHand[1] = drawCard(tableId);
-    io.to(tableId).emit('table_update', getSafeTable(table)); // 🔥 to aktualizuje widok
+    io.to(tableId).emit('table_update', getSafeTable(table));
   }
-  let total = calculateHand(table.dealerHand);
-  while (total < 17) {
+  let dealerTotal = calculateHand(table.dealerHand);
+  while (dealerTotal < 17) {
     table.dealerHand.push(drawCard(tableId));
-    total = calculateHand(table.dealerHand);
+    dealerTotal = calculateHand(table.dealerHand);
   }
 
   table.players.forEach(p => {
     if (!p || p.bet === 0) return;
     const playerTotal = calculateHand(p.hand);
-    if (playerTotal > 21) p.result = 'Przegrana';
-    else if (total > 21 || playerTotal > total) {
-      p.result = 'Wygrana';
+    const isPlayerBJ = p.hand.length === 2 && playerTotal === 21;
+    const isDealerBJ = table.dealerHand.length === 2 && dealerTotal === 21;
+
+    if (playerTotal > 21) {
+      p.result = 'Przegrana';
+    } else if (isPlayerBJ && !isDealerBJ) {
+      p.result = 'Blackjack!';
       User.findOne({ where: { username: p.username } }).then(user => {
-        if (user) { user.balance += p.bet * 2; user.save(); }
+        if (user) {
+          user.balance += Math.floor(p.bet * 2.5); // płaci 3:2
+          user.save();
+        }
       });
-    } else if (playerTotal === total) {
+    } else if (!isPlayerBJ && isDealerBJ) {
+      p.result = 'Przegrana';
+    } else if (isPlayerBJ && isDealerBJ) {
       p.result = 'Remis';
       User.findOne({ where: { username: p.username } }).then(user => {
-        if (user) { user.balance += p.bet; user.save(); }
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+        }
       });
-    } else p.result = 'Przegrana';
+    } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
+      p.result = 'Wygrana';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet * 2;
+          user.save();
+        }
+      });
+    } else if (playerTotal === dealerTotal) {
+      p.result = 'Remis';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+        }
+      });
+    } else {
+      p.result = 'Przegrana';
+    }
   });
 
   io.to(tableId).emit('round_result', getSafeTable(table));
