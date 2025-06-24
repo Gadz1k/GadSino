@@ -49,7 +49,7 @@ let tables = {
     phase: 'waiting_for_bets',
     currentPlayerIndex: 0,
     countdown: null,
-    countdownValue: 15,
+    countdownValue: 8,
     shoe: createShoe()
   }
 };
