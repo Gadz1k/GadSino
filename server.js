@@ -179,14 +179,34 @@ io.on('connection', socket => {
   });
 });
 
-function startRound(tableId) {
+async function startRound(tableId) {
   const table = tables[tableId];
-  table.players = table.players.map(p =>
-    p && p.bet > 0 ? { ...p, hand: [drawCard(tableId), drawCard(tableId)], status: 'playing' } : p ? { ...p, hand: [], status: 'waiting' } : null
-  );
-  table.dealerHand = [drawCard(tableId), { rank: '❓', suit: null }];
+  
+  // znajdź wszystkich aktywnych graczy z zakładem
+  const activePlayers = table.players
+    .map((player, idx) => ({ player, idx }))
+    .filter(({ player }) => player && player.bet > 0);
+
+  // pierwsza runda rozdawania po jednej karcie dla graczy
+  activePlayers.forEach(({ player }) => {
+    player.hand = [drawCard(tableId)];
+    player.status = 'playing';
+  });
+
+  // jedna karta dla krupiera (widoczna)
+  table.dealerHand = [drawCard(tableId)];
+
+  // druga runda rozdawania po jednej karcie dla graczy
+  activePlayers.forEach(({ player }) => {
+    player.hand.push(drawCard(tableId));
+  });
+
+  // druga karta dla krupiera (ukryta)
+  table.dealerHand.push({ rank: '❓', suit: null });
+
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
+
   io.to(tableId).emit('round_started', getSafeTable(table));
   promptNextPlayer(tableId);
 }
