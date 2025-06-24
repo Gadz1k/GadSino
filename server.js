@@ -144,7 +144,7 @@ io.on('connection', socket => {
 
       const activeCount = table.players.filter(p => p && p.bet > 0).length;
       if (activeCount === 1 && !table.countdown) {
-        table.countdownValue = 15;
+        table.countdownValue = 8;
         table.countdown = setInterval(() => {
           if (!tables[tableId]) return clearInterval(table.countdown);
           table.countdownValue--;
@@ -277,7 +277,7 @@ function resetTable(tableId) {
   table.phase = 'waiting_for_bets';
   table.currentPlayerIndex = 0;
   table.countdown = null;
-  table.countdownValue = 15;
+  table.countdownValue = 8;
   io.to(tableId).emit('table_update', getSafeTable(table));
 }
 
