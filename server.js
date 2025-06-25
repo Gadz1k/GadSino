@@ -39,8 +39,12 @@ function shuffle(deck) {
 
 function getSafeTable(table) {
   const { countdown, ...safe } = table;
-  return safe;
+  return {
+    ...safe,
+    shoeSize: table.shoe.length
+  };
 }
+
 
 let tables = {
   default: {
