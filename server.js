@@ -113,6 +113,7 @@ io.on('connection', socket => {
       io.to(tableId).emit('table_update', getSafeTable(table));
     }
   });
+});
 
   socket.on('leave_table', ({ tableId, username }) => {
     const table = tables[tableId];
