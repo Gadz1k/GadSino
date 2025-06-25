@@ -205,7 +205,7 @@ socket.on('player_action', async ({ tableId, username, action }) => {
 
 async function startRound(tableId) {
   const table = tables[tableId];
-  
+
   // znajdź wszystkich aktywnych graczy z zakładem
   const activePlayers = table.players
     .map((player, idx) => ({ player, idx }))
@@ -214,7 +214,6 @@ async function startRound(tableId) {
   // pierwsza runda rozdawania po jednej karcie dla graczy
   activePlayers.forEach(({ player }) => {
     player.hand = [drawCard(tableId)];
-    player.status = 'playing';
   });
 
   // jedna karta dla krupiera (widoczna)
@@ -223,6 +222,12 @@ async function startRound(tableId) {
   // druga runda rozdawania po jednej karcie dla graczy
   activePlayers.forEach(({ player }) => {
     player.hand.push(drawCard(tableId));
+    const total = calculateHand(player.hand);
+    if (total === 21 && player.hand.length === 2) {
+      player.status = 'stand'; // automatyczny stand przy blackjacku
+    } else {
+      player.status = 'playing';
+    }
   });
 
   // druga karta dla krupiera (ukryta)
