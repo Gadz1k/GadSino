@@ -460,9 +460,6 @@ app.post('/player/:username/deposit', async (req, res) => {
   res.json({ balance: user.balance });
 });
 
-// Dodaj ten endpoint na końcu pliku server.js (przed server.listen)
-const { Op } = require("sequelize");
-
 // Historia transakcji (mock – zakłada, że masz model Transaction)
 // Jeśli nie masz modelu Transaction, poniżej daję też wersję "fake"
 app.get('/player/:username/history', async (req, res) => {
