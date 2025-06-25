@@ -380,6 +380,33 @@ app.post('/player/:username/deposit', async (req, res) => {
   res.json({ balance: user.balance });
 });
 
+// Dodaj ten endpoint na końcu pliku server.js (przed server.listen)
+const { Op } = require("sequelize");
+
+// Historia transakcji (mock – zakłada, że masz model Transaction)
+// Jeśli nie masz modelu Transaction, poniżej daję też wersję "fake"
+app.get('/player/:username/history', async (req, res) => {
+  const { username } = req.params;
+
+  // Zakładając, że masz model Transaction:
+  /*
+  const transactions = await Transaction.findAll({
+    where: { username },
+    order: [['createdAt', 'DESC']],
+    limit: 20
+  });
+  return res.json(transactions);
+  */
+
+  // Tymczasowy mock:
+  const fakeHistory = [
+    { date: new Date(), type: 'Wpłata', amount: 1000, balanceAfter: 2000 },
+    { date: new Date(Date.now() - 86400000), type: 'Zakład', amount: -500, balanceAfter: 1000 },
+    { date: new Date(Date.now() - 172800000), type: 'Wygrana', amount: 1500, balanceAfter: 1500 },
+  ];
+  res.json(fakeHistory);
+});
+
 sequelize.sync().then(() => {
   server.listen(port, () => console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
 }).catch(err => console.error('Błąd bazy danych:', err));
