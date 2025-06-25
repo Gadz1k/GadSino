@@ -418,16 +418,18 @@ app.get('/leaderboard/:type', async (req, res) => {
     const transactions = await sequelize.query(`
       SELECT u.username, SUM(t."balanceChange") AS balance
       FROM "Users" u
-      JOIN "Transactions" t ON u.id = t."userId" AND t.type IN ('win', 'blackjack', 'refund')
-      ${type === 'all' ? '' : `WHERE t.createdAt >= :start`}
+      JOIN "Transactions" t ON u.id = t."userId"
+      WHERE t.type IN ('win', 'blackjack', 'refund', 'bet', 'double')
+      ${type !== 'all' ? 'AND t."createdAt" >= :start' : ''}
       GROUP BY u.id
       ORDER BY balance DESC
       LIMIT 5
     `, {
       replacements: {
-        start: type === 'daily' ? new Date(new Date().setHours(0, 0, 0, 0)) :
-              type === 'monthly' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1) :
-              null
+        start:
+          type === 'daily' ? new Date(new Date().setHours(0, 0, 0, 0)) :
+          type === 'monthly' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1) :
+          null
       },
       type: sequelize.QueryTypes.SELECT
     });
