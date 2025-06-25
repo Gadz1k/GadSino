@@ -159,24 +159,40 @@ io.on('connection', socket => {
     });
   });
 
-  socket.on('player_action', ({ tableId, username, action }) => {
-    const table = tables[tableId];
-    const current = table.players[table.currentPlayerIndex];
-    if (!current || current.username !== username) return;
-    
-    if (action === 'hit') {
-      current.hand.push(drawCard(tableId));
-      io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
-      if (calculateHand(current.hand) > 21) {
-        current.status = 'bust';
-        nextTurn(tableId);
-      }
-    } else if (action === 'stand') {
-      current.status = 'stand';
+socket.on('player_action', async ({ tableId, username, action }) => {
+  const table = tables[tableId];
+  const current = table.players[table.currentPlayerIndex];
+  if (!current || current.username !== username) return;
+
+  if (action === 'hit') {
+    current.hand.push(drawCard(tableId));
+    io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+    if (calculateHand(current.hand) > 21) {
+      current.status = 'bust';
       nextTurn(tableId);
     }
-    io.to(tableId).emit('table_update', getSafeTable(table));
-  });
+  } else if (action === 'stand') {
+    current.status = 'stand';
+    nextTurn(tableId);
+  } else if (action === 'double') {
+    if (current.hand.length === 2) {
+      const user = await User.findOne({ where: { username } });
+      if (user && user.balance >= current.bet) {
+        user.balance -= current.bet;
+        await user.save();
+
+        current.bet *= 2;
+        current.hand.push(drawCard(tableId));
+        current.status = 'stand';
+
+        io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+        nextTurn(tableId);
+      }
+    }
+  }
+
+  io.to(tableId).emit('table_update', getSafeTable(table));
+});
 });
 
 async function startRound(tableId) {
