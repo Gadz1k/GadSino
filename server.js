@@ -365,6 +365,49 @@ app.get('/leaderboard', async (req, res) => {
   }
 });
 
+const { Op } = require("sequelize");
+const { fn, col, where, literal } = require("sequelize");
+
+app.get('/leaderboard/:type', async (req, res) => {
+  const { type } = req.params;
+  let whereClause = {};
+
+  if (type === 'daily') {
+    whereClause.createdAt = {
+      [Op.gte]: new Date(new Date().setHours(0, 0, 0, 0))
+    };
+  } else if (type === 'monthly') {
+    const now = new Date();
+    const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+    whereClause.createdAt = { [Op.gte]: firstDay };
+  }
+
+  try {
+    // Zakładamy, że masz model Transaction lub inny, który trzyma bilans zmian
+    const transactions = await sequelize.query(`
+      SELECT u.username, SUM(t.balanceChange) AS balance
+      FROM Users u
+      JOIN Transactions t ON u.id = t.userId
+      ${type === 'all' ? '' : `WHERE t.createdAt >= :start`}
+      GROUP BY u.id
+      ORDER BY balance DESC
+      LIMIT 5
+    `, {
+      replacements: {
+        start: type === 'daily' ? new Date(new Date().setHours(0, 0, 0, 0)) :
+              type === 'monthly' ? new Date(new Date().getFullYear(), new Date().getMonth(), 1) :
+              null
+      },
+      type: sequelize.QueryTypes.SELECT
+    });
+
+    res.json(transactions);
+  } catch (err) {
+    console.error(`Błąd leaderboard/${type}:`, err);
+    res.status(500).json({ message: 'Błąd leaderboardu' });
+  }
+});
+
 app.post('/player/:username/deposit', async (req, res) => {
   const { username } = req.params;
   const { amount } = req.body;
