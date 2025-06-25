@@ -166,11 +166,19 @@ socket.on('player_action', async ({ tableId, username, action }) => {
 
   if (action === 'hit') {
     current.hand.push(drawCard(tableId));
+    const total = calculateHand(current.hand);
+
     io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
-    if (calculateHand(current.hand) > 21) {
+
+    if (total === 21) {
+      current.status = 'stand';
+      nextTurn(tableId);
+    } else if (total > 21) {
       current.status = 'bust';
       nextTurn(tableId);
     }
+
+    io.to(tableId).emit('table_update', getSafeTable(table));
   } else if (action === 'stand') {
     current.status = 'stand';
     nextTurn(tableId);
