@@ -159,25 +159,43 @@ io.on('connection', socket => {
     });
   });
 
-  socket.on('player_action', ({ tableId, username, action }) => {
-    const table = tables[tableId];
-    const current = table.players[table.currentPlayerIndex];
-    if (!current || current.username !== username) return;
+socket.on('player_action', ({ tableId, username, action }) => {
+  const table = tables[tableId];
+  const current = table.players[table.currentPlayerIndex];
+  if (!current || current.username !== username) return;
 
-    if (action === 'hit') {
-      current.hand.push(drawCard(tableId));
-      io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
-      if (calculateHand(current.hand) > 21) {
-        current.status = 'bust';
-        nextTurn(tableId);
-      }
-    } else if (action === 'stand') {
-      current.status = 'stand';
+  if (action === 'double') {
+    if (current.hand.length === 2) {
+      User.findOne({ where: { username } }).then(user => {
+        if (user && user.balance >= current.bet) {
+          user.balance -= current.bet;
+          current.bet *= 2;
+          user.save();
+
+          current.hand.push(drawCard(tableId));
+          current.status = 'stand';
+
+          io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+          io.to(tableId).emit('table_update', getSafeTable(table));
+          nextTurn(tableId);
+        }
+      });
+    }
+  } else if (action === 'hit') {
+    current.hand.push(drawCard(tableId));
+    io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+    if (calculateHand(current.hand) > 21) {
+      current.status = 'bust';
       nextTurn(tableId);
     }
     io.to(tableId).emit('table_update', getSafeTable(table));
-  });
+  } else if (action === 'stand') {
+    current.status = 'stand';
+    nextTurn(tableId);
+    io.to(tableId).emit('table_update', getSafeTable(table));
+  }
 });
+
 
 async function startRound(tableId) {
   const table = tables[tableId];
