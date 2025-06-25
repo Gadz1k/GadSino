@@ -168,6 +168,7 @@ io.on('connection', socket => {
         }, 1000);
       }
     });
+
   });
 
 socket.on('player_action', async ({ tableId, username, action }) => {
@@ -217,6 +218,20 @@ socket.on('player_action', async ({ tableId, username, action }) => {
   }
 
   io.to(tableId).emit('table_update', getSafeTable(table));
+});
+// Automatyczna synchronizacja po odświeżeniu
+socket.on('sync_state', ({ tableId, username }) => {
+  const table = tables[tableId];
+  if (!table) return;
+
+  const player = table.players.find(p => p && p.username === username);
+  if (!player) return;
+
+  socket.emit('table_update', getSafeTable(table));
+
+  if (table.phase === 'playing' && table.players[table.currentPlayerIndex]?.username === username) {
+    socket.emit('your_turn', username); // ponownie wyślij sygnał, że jego tura
+  }
 });
 });
 
