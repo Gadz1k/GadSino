@@ -347,6 +347,20 @@ app.get('/users', async (req, res) => {
   }
 });
 
+app.get('/leaderboard', async (req, res) => {
+  try {
+    const topPlayers = await User.findAll({
+      order: [['balance', 'DESC']],
+      limit: 5,
+      attributes: ['username', 'balance']
+    });
+    res.json(topPlayers);
+  } catch (err) {
+    console.error('Leaderboard error:', err);
+    res.status(500).json({ message: 'Błąd pobierania leaderboardu' });
+  }
+});
+
 sequelize.sync().then(() => {
   server.listen(port, () => console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
 }).catch(err => console.error('Błąd bazy danych:', err));
