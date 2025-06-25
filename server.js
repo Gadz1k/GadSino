@@ -416,9 +416,9 @@ app.get('/leaderboard/:type', async (req, res) => {
   try {
     // Zakładamy, że masz model Transaction lub inny, który trzyma bilans zmian
     const transactions = await sequelize.query(`
-      SELECT u.username, SUM(t.balanceChange) AS balance
-      FROM Users u
-      JOIN Transactions t ON u.id = t.userId AND t.type IN ('win', 'blackjack', 'refund')
+      SELECT u.username, SUM(t."balanceChange") AS balance
+      FROM "Users" u
+      JOIN "Transactions" t ON u.id = t."userId" AND t.type IN ('win', 'blackjack', 'refund')
       ${type === 'all' ? '' : `WHERE t.createdAt >= :start`}
       GROUP BY u.id
       ORDER BY balance DESC
