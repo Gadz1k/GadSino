@@ -216,6 +216,40 @@ socket.on('player_action', async ({ tableId, username, action }) => {
       }
     }
   }
+  else if (action === 'split') {
+    if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank) {
+      const user = await User.findOne({ where: { username } });
+      if (!user || user.balance < current.bet) return;
+
+      user.balance -= current.bet;
+      await user.save();
+
+      await Transaction.create({
+        userId: user.id,
+        balanceChange: -current.bet,
+        type: 'split'
+      });
+
+      // Stwórz dwie ręce – jedna zostaje, druga z kartą idzie do slotu pustego
+      const splitCard = current.hand.pop();
+      const newHand = [splitCard];
+      current.hand.push(drawCard(tableId));
+      newHand.push(drawCard(tableId));
+
+      const newSlotIndex = table.players.findIndex(p => !p);
+      if (newSlotIndex === -1) return; // brak miejsca
+
+      table.players[newSlotIndex] = {
+        username,
+        hand: newHand,
+        bet: current.bet,
+        status: 'playing',
+        result: ''
+      };
+
+      io.to(tableId).emit('table_update', getSafeTable(table));
+    }
+  }
 
   io.to(tableId).emit('table_update', getSafeTable(table));
 });
