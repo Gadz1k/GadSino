@@ -7,6 +7,7 @@ const bcrypt = require('bcrypt');
 
 const sequelize = require('./sequelize');
 const User = require('./models/user');
+const Transaction = require('./models/transaction');
 
 const app = express();
 const server = http.createServer(app);
@@ -139,6 +140,12 @@ io.on('connection', socket => {
       user.balance -= amount;
       user.save();
 
+      Transaction.create({
+        userId: user.id,
+        balanceChange: -amount,
+        type: 'bet'
+      });
+
       // Status ustawiamy tylko raz
       if (player.status !== 'bet_placed') {
         player.status = 'bet_placed';
@@ -192,6 +199,12 @@ socket.on('player_action', async ({ tableId, username, action }) => {
       if (user && user.balance >= current.bet) {
         user.balance -= current.bet;
         await user.save();
+
+        await Transaction.create({
+          userId: user.id,
+          balanceChange: -current.bet,
+          type: 'double'
+        });
 
         current.bet *= 2;
         current.hand.push(drawCard(tableId));
@@ -286,6 +299,12 @@ function playDealer(tableId) {
         if (user) {
           user.balance += Math.floor(p.bet * 2.5); // płaci 3:2
           user.save();
+
+          Transaction.create({
+            userId: user.id,
+            balanceChange: Math.floor(p.bet * 2.5),
+            type: 'blackjack'
+          });
         }
       });
     } else if (!isPlayerBJ && isDealerBJ) {
@@ -304,6 +323,12 @@ function playDealer(tableId) {
         if (user) {
           user.balance += p.bet * 2;
           user.save();
+
+          Transaction.create({
+            userId: user.id,
+            balanceChange: p.bet * 2,
+            type: 'win'
+          });
         }
       });
     } else if (playerTotal === dealerTotal) {
@@ -312,6 +337,12 @@ function playDealer(tableId) {
         if (user) {
           user.balance += p.bet;
           user.save();
+
+          Transaction.create({
+            userId: user.id,
+            balanceChange: p.bet,
+            type: 'refund'
+          }); 
         }
       });
     } else {
@@ -387,7 +418,7 @@ app.get('/leaderboard/:type', async (req, res) => {
     const transactions = await sequelize.query(`
       SELECT u.username, SUM(t.balanceChange) AS balance
       FROM Users u
-      JOIN Transactions t ON u.id = t.userId
+      JOIN Transactions t ON u.id = t.userId AND t.type IN ('win', 'blackjack', 'refund')
       ${type === 'all' ? '' : `WHERE t.createdAt >= :start`}
       GROUP BY u.id
       ORDER BY balance DESC
@@ -419,6 +450,12 @@ app.post('/player/:username/deposit', async (req, res) => {
 
   user.balance += amount;
   await user.save();
+
+  await Transaction.create({
+  userId: user.id,
+  balanceChange: amount,
+  type: 'deposit'
+  });
 
   res.json({ balance: user.balance });
 });

@@ -6,12 +6,15 @@ const Transaction = sequelize.define('Transaction', {
   balanceChange: {
     type: DataTypes.INTEGER,
     allowNull: false
+  },
+  type: {
+    type: DataTypes.STRING,
+    allowNull: false
   }
 }, {
   timestamps: true
 });
 
-// Powiązanie: jedna transakcja należy do jednego użytkownika
 Transaction.belongsTo(User, { foreignKey: 'userId' });
 
 module.exports = Transaction;
