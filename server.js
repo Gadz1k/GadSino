@@ -365,6 +365,21 @@ app.get('/leaderboard', async (req, res) => {
   }
 });
 
+app.post('/player/:username/deposit', async (req, res) => {
+  const { username } = req.params;
+  const { amount } = req.body;
+
+  if (!amount || amount <= 0) return res.status(400).json({ message: "Nieprawidłowa kwota." });
+
+  const user = await User.findOne({ where: { username } });
+  if (!user) return res.status(404).json({ message: "Użytkownik nie istnieje." });
+
+  user.balance += amount;
+  await user.save();
+
+  res.json({ balance: user.balance });
+});
+
 sequelize.sync().then(() => {
   server.listen(port, () => console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
 }).catch(err => console.error('Błąd bazy danych:', err));
