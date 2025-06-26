@@ -129,57 +129,60 @@ io.on('connection', socket => {
     }
   });
 
-  socket.on('leave_table', ({ tableId, username }) => {
-    const table = tables[tableId];
-    if (!table) return;
-    table.players = table.players.map(p => (p?.username === username ? null : p));
-    io.to(tableId).emit('table_update', getSafeTable(table));
-  });
+socket.on('place_bet', ({ tableId, username, amount, type = 'main' }) => {
+  const table = tables[tableId];
+  if (!table || table.phase !== 'waiting_for_bets') return;
+  const player = table.players.find(p => p && p.username === username);
+  if (!player) return;
 
-  socket.on('place_bet', ({ tableId, username, amount }) => {
-    const table = tables[tableId];
-    if (!table || table.phase !== 'waiting_for_bets') return;
-    const player = table.players.find(p => p && p.username === username);
-    if (!player) return;
+  User.findOne({ where: { username } }).then(user => {
+    if (!user || user.balance < amount) return;
 
-    User.findOne({ where: { username } }).then(user => {
-      if (!user || user.balance < amount) return;
+    // Przygotuj sideBets jeśli nie istnieją
+    if (!player.sideBets) {
+      player.sideBets = { '21+3': 0, 'pair': 0, 'vs': 0 };
+    }
 
-      // Sumujemy zakład zamiast nadpisywać
+    // Sprawdź jaki typ zakładu
+    if (type === 'main') {
       player.bet += amount;
-      user.balance -= amount;
-      user.save();
+    } else if (['21+3', 'pair', 'vs'].includes(type)) {
+      player.sideBets[type] += amount;
+    } else {
+      return; // nieznany typ
+    }
 
-      Transaction.create({
-        userId: user.id,
-        balanceChange: -amount,
-        type: 'bet'
-      });
+    user.balance -= amount;
+    user.save();
 
-      // Status ustawiamy tylko raz
-      if (player.status !== 'bet_placed') {
-        player.status = 'bet_placed';
-      }
-
-      io.to(tableId).emit('table_update', getSafeTable(table));
-
-      const activeCount = table.players.filter(p => p && p.bet > 0).length;
-      if (activeCount === 1 && !table.countdown) {
-        table.countdownValue = 8;
-        table.countdown = setInterval(() => {
-          if (!tables[tableId]) return clearInterval(table.countdown);
-          table.countdownValue--;
-          io.to(tableId).emit('countdown_tick', table.countdownValue);
-          if (table.countdownValue <= 0) {
-            clearInterval(table.countdown);
-            table.countdown = null;
-            startRound(tableId);
-          }
-        }, 1000);
-      }
+    Transaction.create({
+      userId: user.id,
+      balanceChange: -amount,
+      type: type === 'main' ? 'bet' : `side-bet-${type}`
     });
 
+    if (player.status !== 'bet_placed') {
+      player.status = 'bet_placed';
+    }
+
+    io.to(tableId).emit('table_update', getSafeTable(table));
+
+    const activeCount = table.players.filter(p => p && (p.bet > 0)).length;
+    if (activeCount === 1 && !table.countdown) {
+      table.countdownValue = 8;
+      table.countdown = setInterval(() => {
+        if (!tables[tableId]) return clearInterval(table.countdown);
+        table.countdownValue--;
+        io.to(tableId).emit('countdown_tick', table.countdownValue);
+        if (table.countdownValue <= 0) {
+          clearInterval(table.countdown);
+          table.countdown = null;
+          startRound(tableId);
+        }
+      }, 1000);
+    }
   });
+});
 
 socket.on('player_action', async ({ tableId, username, action }) => {
   const table = tables[tableId];
