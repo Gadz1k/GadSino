@@ -113,14 +113,7 @@ io.on('connection', socket => {
     if (!table) return;
     if (table.players.some(p => p?.username === username)) return;
     if (slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
-      table.players[slotIndex] = {
-        username,
-        hands: [[]], // tablica rąk
-        activeHandIndex: 0,
-        bets: [0], // zakłady dla każdej ręki
-        statuses: ['waiting'], // statusy każdej ręki
-        results: [''] // wynik dla każdej ręki
-      };
+      table.players[slotIndex] = { username, hand: [], bet: 0, status: 'waiting', result: '' };
       socket.join(tableId);
       io.to(tableId).emit('table_update', getSafeTable(table));
     }
@@ -129,14 +122,7 @@ io.on('connection', socket => {
   socket.on('leave_table', ({ tableId, username }) => {
     const table = tables[tableId];
     if (!table) return;
-    table.players = table.players.map(p => p ? {
-      ...p,
-      hands: [[]],
-      bets: [0],
-      statuses: ['waiting'],
-      results: [''],
-      activeHandIndex: 0
-    } : null);
+    table.players = table.players.map(p => (p?.username === username ? null : p));
     io.to(tableId).emit('table_update', getSafeTable(table));
   });
 
@@ -150,7 +136,7 @@ io.on('connection', socket => {
       if (!user || user.balance < amount) return;
 
       // Sumujemy zakład zamiast nadpisywać
-      player.bets[0] += amount;
+      player.bet += amount;
       user.balance -= amount;
       user.save();
 
@@ -161,8 +147,8 @@ io.on('connection', socket => {
       });
 
       // Status ustawiamy tylko raz
-      if (player.statuses[0] !== 'bet_placed') {
-        player.statuses[0] = 'bet_placed';
+      if (player.status !== 'bet_placed') {
+        player.status = 'bet_placed';
       }
 
       io.to(tableId).emit('table_update', getSafeTable(table));
@@ -187,76 +173,81 @@ io.on('connection', socket => {
 
 socket.on('player_action', async ({ tableId, username, action }) => {
   const table = tables[tableId];
-  const player = table.players[table.currentPlayerIndex];
-  if (!player || player.username !== username) return;
-
-  const handIndex = player.activeHandIndex;
-  const currentHand = player.hands[handIndex];
+  const current = table.players[table.currentPlayerIndex];
+  if (!current || current.username !== username) return;
 
   if (action === 'hit') {
-    currentHand.push(drawCard(tableId));
-    const total = calculateHand(currentHand);
+    current.hand.push(drawCard(tableId));
+    const total = calculateHand(current.hand);
 
-    io.to(tableId).emit('player_updated', { username, hands: player.hands });
+    io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
 
     if (total === 21) {
-      player.statuses[handIndex] = 'stand';
-      nextHandOrTurn(tableId);
+      current.status = 'stand';
+      nextTurn(tableId);
     } else if (total > 21) {
-      player.statuses[handIndex] = 'bust';
-      nextHandOrTurn(tableId);
+      current.status = 'bust';
+      nextTurn(tableId);
     }
 
+    io.to(tableId).emit('table_update', getSafeTable(table));
   } else if (action === 'stand') {
-    player.statuses[handIndex] = 'stand';
-    nextHandOrTurn(tableId);
-
+    current.status = 'stand';
+    nextTurn(tableId);
   } else if (action === 'double') {
-    const user = await User.findOne({ where: { username } });
-    if (user && user.balance >= player.bets[handIndex] && currentHand.length === 2) {
-      user.balance -= player.bets[handIndex];
-      await user.save();
-
-      await Transaction.create({
-        userId: user.id,
-        balanceChange: -player.bets[handIndex],
-        type: 'double'
-      });
-
-      player.bets[handIndex] *= 2;
-      currentHand.push(drawCard(tableId));
-      player.statuses[handIndex] = 'stand';
-
-      io.to(tableId).emit('player_updated', { username, hands: player.hands });
-      nextHandOrTurn(tableId);
-    }
-
-  } else if (action === 'split') {
-    if (
-      currentHand.length === 2 &&
-      currentHand[0].rank === currentHand[1].rank &&
-      player.hands.length < 4 // maksymalnie 4 ręce
-    ) {
+    if (current.hand.length === 2) {
       const user = await User.findOne({ where: { username } });
-      if (!user || user.balance < player.bets[handIndex]) return;
+      if (user && user.balance >= current.bet) {
+        user.balance -= current.bet;
+        await user.save();
 
-      user.balance -= player.bets[handIndex];
+        await Transaction.create({
+          userId: user.id,
+          balanceChange: -current.bet,
+          type: 'double'
+        });
+
+        current.bet *= 2;
+        current.hand.push(drawCard(tableId));
+        current.status = 'stand';
+
+        io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+        nextTurn(tableId);
+      }
+    }
+  }
+  else if (action === 'split') {
+    if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank) {
+      const user = await User.findOne({ where: { username } });
+      if (!user || user.balance < current.bet) return;
+
+      user.balance -= current.bet;
       await user.save();
 
       await Transaction.create({
         userId: user.id,
-        balanceChange: -player.bets[handIndex],
+        balanceChange: -current.bet,
         type: 'split'
       });
 
-      const newCard = currentHand.pop(); // zabieramy drugą kartę
-      const newHand = [newCard, drawCard(tableId)];
-      currentHand.push(drawCard(tableId));
+      // Stwórz dwie ręce – jedna zostaje, druga z kartą idzie do slotu pustego
+      const splitCard = current.hand.pop();
+      const newHand = [splitCard];
+      current.hand.push(drawCard(tableId));
+      newHand.push(drawCard(tableId));
 
-      player.hands.push(newHand);
-      player.bets.push(player.bets[handIndex]);
-      player.statuses.push('playing');
-      player.results.push('');
+      const newSlotIndex = table.players.findIndex(p => !p);
+      if (newSlotIndex === -1) return; // brak miejsca
+
+      table.players[newSlotIndex] = {
+        username,
+        hand: newHand,
+        bet: current.bet,
+        status: 'playing',
+        result: ''
+      };
+
+      io.to(tableId).emit('table_update', getSafeTable(table));
     }
   }
 
@@ -281,28 +272,31 @@ socket.on('sync_state', ({ tableId, username }) => {
 async function startRound(tableId) {
   const table = tables[tableId];
 
+  // znajdź wszystkich aktywnych graczy z zakładem
   const activePlayers = table.players
     .map((player, idx) => ({ player, idx }))
-    .filter(({ player }) => player && player.bets[0] > 0);
+    .filter(({ player }) => player && player.bet > 0);
 
+  // pierwsza runda rozdawania po jednej karcie dla graczy
   activePlayers.forEach(({ player }) => {
-    player.hands = [[drawCard(tableId)]];
-    player.bets = [player.bets[0]]; // resetuj na jedną rękę
-    player.statuses = ['playing'];
-    player.results = [''];
-    player.activeHandIndex = 0;
+    player.hand = [drawCard(tableId)];
   });
 
+  // jedna karta dla krupiera (widoczna)
   table.dealerHand = [drawCard(tableId)];
 
+  // druga runda rozdawania po jednej karcie dla graczy
   activePlayers.forEach(({ player }) => {
-    player.hands[0].push(drawCard(tableId));
-    const total = calculateHand(player.hands[0]);
-    if (total === 21) {
-      player.statuses[0] = 'stand';
+    player.hand.push(drawCard(tableId));
+    const total = calculateHand(player.hand);
+    if (total === 21 && player.hand.length === 2) {
+      player.status = 'stand'; // automatyczny stand przy blackjacku
+    } else {
+      player.status = 'playing';
     }
   });
 
+  // druga karta dla krupiera (ukryta)
   table.dealerHand.push({ rank: '❓', suit: null });
 
   table.phase = 'playing';
@@ -315,13 +309,7 @@ async function startRound(tableId) {
 function promptNextPlayer(tableId) {
   const table = tables[tableId];
   let idx = table.currentPlayerIndex;
-  while (
-    idx < table.players.length &&
-    (
-      !table.players[idx] ||
-      table.players[idx].statuses.every(status => status !== 'playing')
-    )
-  ) idx++;
+  while (idx < table.players.length && (!table.players[idx] || table.players[idx].status !== 'playing')) idx++;
   if (idx >= table.players.length) playDealer(tableId);
   else {
     table.currentPlayerIndex = idx;
@@ -332,27 +320,6 @@ function promptNextPlayer(tableId) {
 function nextTurn(tableId) {
   tables[tableId].currentPlayerIndex++;
   promptNextPlayer(tableId);
-}
-
-function nextHandOrTurn(tableId) {
-  const table = tables[tableId];
-  const player = table.players[table.currentPlayerIndex];
-  if (!player) return;
-
-  player.activeHandIndex++;
-
-  while (
-    player.activeHandIndex < player.hands.length &&
-    player.statuses[player.activeHandIndex] !== 'playing'
-  ) {
-    player.activeHandIndex++;
-  }
-
-  if (player.activeHandIndex >= player.hands.length) {
-    nextTurn(tableId);
-  } else {
-    io.to(tableId).emit('your_turn', player.username);
-  }
 }
 
 function playDealer(tableId) {
@@ -367,48 +334,70 @@ function playDealer(tableId) {
     dealerTotal = calculateHand(table.dealerHand);
   }
 
-table.players.forEach(player => {
-  if (!player) return;
+  table.players.forEach(p => {
+    if (!p || p.bet === 0) return;
+    const playerTotal = calculateHand(p.hand);
+    const isPlayerBJ = p.hand.length === 2 && playerTotal === 21;
+    const isDealerBJ = table.dealerHand.length === 2 && dealerTotal === 21;
 
-  player.hands.forEach((hand, i) => {
-    const total = calculateHand(hand);
-    const bet = player.bets[i];
-    const isBJ = hand.length === 2 && total === 21;
-    const dealerBJ = table.dealerHand.length === 2 && calculateHand(table.dealerHand) === 21;
-
-    let result = '';
-    if (total > 21) result = 'Przegrana';
-    else if (isBJ && !dealerBJ) result = 'Blackjack!';
-    else if (!isBJ && dealerBJ) result = 'Przegrana';
-    else if (isBJ && dealerBJ) result = 'Remis';
-    else if (calculateHand(table.dealerHand) > 21 || total > calculateHand(table.dealerHand)) result = 'Wygrana';
-    else if (total === calculateHand(table.dealerHand)) result = 'Remis';
-    else result = 'Przegrana';
-
-    player.results[i] = result;
-
-    const reward =
-      result === 'Blackjack!' ? Math.floor(bet * 2.5) :
-      result === 'Wygrana' ? bet * 2 :
-      result === 'Remis' ? bet :
-      0;
-
-    if (reward > 0) {
-      User.findOne({ where: { username: player.username } }).then(user => {
+    if (playerTotal > 21) {
+      p.result = 'Przegrana';
+    } else if (isPlayerBJ && !isDealerBJ) {
+      p.result = 'Blackjack!';
+      User.findOne({ where: { username: p.username } }).then(user => {
         if (user) {
-          user.balance += reward;
+          user.balance += Math.floor(p.bet * 2.5); // płaci 3:2
           user.save();
 
           Transaction.create({
             userId: user.id,
-            balanceChange: reward,
-            type: result === 'Blackjack!' ? 'blackjack' : (result === 'Remis' ? 'refund' : 'win')
+            balanceChange: Math.floor(p.bet * 2.5),
+            type: 'blackjack'
           });
         }
       });
+    } else if (!isPlayerBJ && isDealerBJ) {
+      p.result = 'Przegrana';
+    } else if (isPlayerBJ && isDealerBJ) {
+      p.result = 'Remis';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+        }
+      });
+    } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
+      p.result = 'Wygrana';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet * 2;
+          user.save();
+
+          Transaction.create({
+            userId: user.id,
+            balanceChange: p.bet * 2,
+            type: 'win'
+          });
+        }
+      });
+    } else if (playerTotal === dealerTotal) {
+      p.result = 'Remis';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+
+          Transaction.create({
+            userId: user.id,
+            balanceChange: p.bet,
+            type: 'refund'
+          }); 
+        }
+      });
+    } else {
+      p.result = 'Przegrana';
     }
   });
-});
 
   io.to(tableId).emit('round_result', getSafeTable(table));
   setTimeout(() => resetTable(tableId), 8000);
@@ -416,14 +405,7 @@ table.players.forEach(player => {
 
 function resetTable(tableId) {
   const table = tables[tableId];
-  table.players = table.players.map(p => p ? {
-    ...p,
-    hands: [[]],
-    bets: [0],
-    statuses: ['waiting'],
-    results: [''],
-    activeHandIndex: 0
-  } : null);
+  table.players = table.players.map(p => p ? { ...p, hand: [], bet: 0, status: 'waiting', result: '' } : null);
   table.dealerHand = [];
   table.phase = 'waiting_for_bets';
   table.currentPlayerIndex = 0;
