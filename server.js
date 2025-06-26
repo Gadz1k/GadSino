@@ -129,6 +129,18 @@ io.on('connection', socket => {
     }
   });
 
+  socket.on('leave_table', ({ tableId, username }) => {
+  const table = tables[tableId];
+  if (!table) return;
+
+  const playerIndex = table.players.findIndex(p => p && p.username === username);
+  if (playerIndex !== -1) {
+    table.players[playerIndex] = null;
+    io.to(tableId).emit('table_update', getSafeTable(table));
+    console.log(`❌ ${username} opuścił stół ${tableId}`);
+  }
+});
+
 socket.on('place_bet', ({ tableId, username, amount, type = 'main' }) => {
   const table = tables[tableId];
   if (!table || table.phase !== 'waiting_for_bets') return;
