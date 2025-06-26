@@ -290,13 +290,13 @@ async function startRound(tableId) {
   for (let { player } of activePlayers) {
     player.hand = [drawCard(tableId)];
     io.to(tableId).emit('table_update', getSafeTable(table));
-    await sleep(300); // <– delay między kartami
+    await sleep(600); // <– delay między kartami
   }
 
   // 🃏 Pierwsza karta dla dealera (widoczna)
   table.dealerHand = [drawCard(tableId)];
   io.to(tableId).emit('table_update', getSafeTable(table));
-  await sleep(400); // <– lekkie napięcie
+  await sleep(600); // <– lekkie napięcie
 
   // 🃏 Druga karta dla graczy
   for (let { player } of activePlayers) {
@@ -304,7 +304,7 @@ async function startRound(tableId) {
     const total = calculateHand(player.hand);
     player.status = (total === 21 && player.hand.length === 2) ? 'stand' : 'playing';
     io.to(tableId).emit('table_update', getSafeTable(table));
-    await sleep(300);
+    await sleep(600);
   }
 
   // 🕵️‍♂️ Zakryta karta dealera (do późniejszego odkrycia)
@@ -339,7 +339,7 @@ async function playDealer(tableId) {
 
   // 🔓 Odsłoń zakrytą kartę krupiera z dramatycznym opóźnieniem
   if (table.dealerHand.length > 1 && table.dealerHand[1].rank === '❓') {
-    await sleep(800); // napięcie!
+    await sleep(1300); // napięcie!
     table.dealerHand[1] = drawCard(tableId);
     io.to(tableId).emit('table_update', getSafeTable(table));
   }
@@ -348,7 +348,7 @@ async function playDealer(tableId) {
 
   // 🃏 Dobieraj karty do 17 z opóźnieniem
   while (dealerTotal < 17) {
-    await sleep(600); // czas na oddech widzów
+    await sleep(1300); // czas na oddech widzów
     table.dealerHand.push(drawCard(tableId));
     dealerTotal = calculateHand(table.dealerHand);
     io.to(tableId).emit('table_update', getSafeTable(table));
