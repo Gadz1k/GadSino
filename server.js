@@ -113,16 +113,7 @@ io.on('connection', socket => {
     if (!table) return;
     if (table.players.some(p => p?.username === username)) return;
     if (slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
-      table.players[slotIndex] = {
-        username,
-        hand: [],
-        bet: 0,
-        status: 'waiting',
-        result: '',
-        splitHand: null,
-        splitBet: 0,
-        activeHand: 'main' // 'main' albo 'split'
-      };
+      table.players[slotIndex] = { username, hand: [], bet: 0, status: 'waiting', result: '' };
       socket.join(tableId);
       io.to(tableId).emit('table_update', getSafeTable(table));
     }
@@ -185,88 +176,48 @@ socket.on('player_action', async ({ tableId, username, action }) => {
   const current = table.players[table.currentPlayerIndex];
   if (!current || current.username !== username) return;
 
-  const getActiveCards = (player) =>
-    player.activeHand === 'split' ? player.splitHand : player.hand;
-
-  const getActiveBet = (player) =>
-    player.activeHand === 'split' ? player.splitBet : player.bet;
-
   if (action === 'hit') {
-    const cards = getActiveCards(current);
-    cards.push(drawCard(tableId));
-    const total = calculateHand(cards);
+    current.hand.push(drawCard(tableId));
+    const total = calculateHand(current.hand);
 
-    io.to(tableId).emit('player_updated', {
-      username: current.username,
-      hand: current.hand,
-      splitHand: current.splitHand
-    });
+    io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
 
     if (total === 21) {
-      if (current.activeHand === 'main' && current.splitHand) {
-        current.activeHand = 'split';
-      } else {
-        current.status = 'stand';
-        nextTurn(tableId);
-      }
-    } else if (total > 21) {
-      if (current.activeHand === 'main' && current.splitHand) {
-        current.activeHand = 'split';
-      } else {
-        current.status = 'bust';
-        nextTurn(tableId);
-      }
-    }
-
-  } else if (action === 'stand') {
-    if (current.activeHand === 'main' && current.splitHand) {
-      current.activeHand = 'split';
-    } else {
       current.status = 'stand';
+      nextTurn(tableId);
+    } else if (total > 21) {
+      current.status = 'bust';
       nextTurn(tableId);
     }
 
+    io.to(tableId).emit('table_update', getSafeTable(table));
+  } else if (action === 'stand') {
+    current.status = 'stand';
+    nextTurn(tableId);
   } else if (action === 'double') {
-    const cards = getActiveCards(current);
-    const bet = getActiveBet(current);
-
-    if (cards.length === 2) {
+    if (current.hand.length === 2) {
       const user = await User.findOne({ where: { username } });
-      if (user && user.balance >= bet) {
-        user.balance -= bet;
+      if (user && user.balance >= current.bet) {
+        user.balance -= current.bet;
         await user.save();
 
         await Transaction.create({
           userId: user.id,
-          balanceChange: -bet,
+          balanceChange: -current.bet,
           type: 'double'
         });
 
-        if (current.activeHand === 'split') {
-          current.splitBet *= 2;
-        } else {
-          current.bet *= 2;
-        }
+        current.bet *= 2;
+        current.hand.push(drawCard(tableId));
+        current.status = 'stand';
 
-        cards.push(drawCard(tableId));
-
-        io.to(tableId).emit('player_updated', {
-          username: current.username,
-          hand: current.hand,
-          splitHand: current.splitHand
-        });
-
-        if (current.activeHand === 'main' && current.splitHand) {
-          current.activeHand = 'split';
-        } else {
-          current.status = 'stand';
-          nextTurn(tableId);
-        }
+        io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+        nextTurn(tableId);
       }
     }
-
-  } else if (action === 'split') {
-    if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank && !current.splitHand) {
+  }
+  else if (action === 'split') {
+    if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank) {
       const user = await User.findOne({ where: { username } });
       if (!user || user.balance < current.bet) return;
 
@@ -279,21 +230,24 @@ socket.on('player_action', async ({ tableId, username, action }) => {
         type: 'split'
       });
 
+      // Stwórz dwie ręce – jedna zostaje, druga z kartą idzie do slotu pustego
       const splitCard = current.hand.pop();
-
-      current.splitHand = [splitCard];
-      current.splitBet = current.bet;
-
+      const newHand = [splitCard];
       current.hand.push(drawCard(tableId));
-      current.splitHand.push(drawCard(tableId));
+      newHand.push(drawCard(tableId));
 
-      current.activeHand = 'main'; // gra najpierw główną ręką
+      const newSlotIndex = table.players.findIndex(p => !p);
+      if (newSlotIndex === -1) return; // brak miejsca
 
-      io.to(tableId).emit('player_updated', {
-        username: current.username,
-        hand: current.hand,
-        splitHand: current.splitHand
-      });
+      table.players[newSlotIndex] = {
+        username,
+        hand: newHand,
+        bet: current.bet,
+        status: 'playing',
+        result: ''
+      };
+
+      io.to(tableId).emit('table_update', getSafeTable(table));
     }
   }
 
@@ -374,7 +328,6 @@ function playDealer(tableId) {
     table.dealerHand[1] = drawCard(tableId);
     io.to(tableId).emit('table_update', getSafeTable(table));
   }
-
   let dealerTotal = calculateHand(table.dealerHand);
   while (dealerTotal < 17) {
     table.dealerHand.push(drawCard(tableId));
@@ -383,62 +336,67 @@ function playDealer(tableId) {
 
   table.players.forEach(p => {
     if (!p || p.bet === 0) return;
+    const playerTotal = calculateHand(p.hand);
+    const isPlayerBJ = p.hand.length === 2 && playerTotal === 21;
+    const isDealerBJ = table.dealerHand.length === 2 && dealerTotal === 21;
 
-    const handsToCheck = [
-      { cards: p.hand, bet: p.bet, type: 'main' }
-    ];
-
-    if (p.splitHand) {
-      handsToCheck.push({ cards: p.splitHand, bet: p.splitBet, type: 'split' });
-    }
-
-    handsToCheck.forEach(({ cards, bet, type }) => {
-      const playerTotal = calculateHand(cards);
-      const isPlayerBJ = cards.length === 2 && playerTotal === 21;
-      const isDealerBJ = table.dealerHand.length === 2 && dealerTotal === 21;
-
-      let result = 'Przegrana';
-
-      if (playerTotal > 21) {
-        result = 'Przegrana';
-      } else if (isPlayerBJ && !isDealerBJ) {
-        result = 'Blackjack!';
-      } else if (!isPlayerBJ && isDealerBJ) {
-        result = 'Przegrana';
-      } else if (isPlayerBJ && isDealerBJ) {
-        result = 'Remis';
-      } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
-        result = 'Wygrana';
-      } else if (playerTotal === dealerTotal) {
-        result = 'Remis';
-      }
-
-      // Zapisz wynik
-      if (type === 'main') p.result = result;
-      else p.splitResult = result;
-
-      // Wypłać kasę
+    if (playerTotal > 21) {
+      p.result = 'Przegrana';
+    } else if (isPlayerBJ && !isDealerBJ) {
+      p.result = 'Blackjack!';
       User.findOne({ where: { username: p.username } }).then(user => {
-        if (!user) return;
-
-        let payout = 0;
-        if (result === 'Wygrana') payout = bet * 2;
-        else if (result === 'Blackjack!') payout = Math.floor(bet * 2.5);
-        else if (result === 'Remis') payout = bet;
-
-        if (payout > 0) {
-          user.balance += payout;
+        if (user) {
+          user.balance += Math.floor(p.bet * 2.5); // płaci 3:2
           user.save();
 
           Transaction.create({
             userId: user.id,
-            balanceChange: payout,
-            type: result === 'Blackjack!' ? 'blackjack' :
-                  result === 'Wygrana' ? 'win' : 'refund'
+            balanceChange: Math.floor(p.bet * 2.5),
+            type: 'blackjack'
           });
         }
       });
-    });
+    } else if (!isPlayerBJ && isDealerBJ) {
+      p.result = 'Przegrana';
+    } else if (isPlayerBJ && isDealerBJ) {
+      p.result = 'Remis';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+        }
+      });
+    } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
+      p.result = 'Wygrana';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet * 2;
+          user.save();
+
+          Transaction.create({
+            userId: user.id,
+            balanceChange: p.bet * 2,
+            type: 'win'
+          });
+        }
+      });
+    } else if (playerTotal === dealerTotal) {
+      p.result = 'Remis';
+      User.findOne({ where: { username: p.username } }).then(user => {
+        if (user) {
+          user.balance += p.bet;
+          user.save();
+
+          Transaction.create({
+            userId: user.id,
+            balanceChange: p.bet,
+            type: 'refund'
+          }); 
+        }
+      });
+    } else {
+      p.result = 'Przegrana';
+    }
   });
 
   io.to(tableId).emit('round_result', getSafeTable(table));
@@ -447,19 +405,7 @@ function playDealer(tableId) {
 
 function resetTable(tableId) {
   const table = tables[tableId];
-  table.players = table.players.map(p =>
-    p ? {
-      ...p,
-      hand: [],
-      bet: 0,
-      splitHand: null,
-      splitBet: 0,
-      status: 'waiting',
-      result: '',
-      splitResult: '',
-      activeHand: 'main'
-    } : null
-  );
+  table.players = table.players.map(p => p ? { ...p, hand: [], bet: 0, status: 'waiting', result: '' } : null);
   table.dealerHand = [];
   table.phase = 'waiting_for_bets';
   table.currentPlayerIndex = 0;
