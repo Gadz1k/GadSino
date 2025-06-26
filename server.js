@@ -40,9 +40,15 @@ function shuffle(deck) {
 
 function getSafeTable(table) {
   const { countdown, ...safe } = table;
+
+  const dealerCards = table.dealerHand || [];
+  const dealerHasHidden = dealerCards.some(c => c.rank === '❓');
+  const dealerValue = dealerHasHidden ? null : calculateHand(dealerCards);
+
   return {
     ...safe,
-    shoeSize: table.shoe.length
+    shoeSize: table.shoe.length,
+    dealerValue
   };
 }
 
