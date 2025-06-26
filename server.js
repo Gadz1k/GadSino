@@ -30,6 +30,10 @@ function createShoe(decks = 3) {
   return shuffle(shoe);
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function shuffle(deck) {
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -190,16 +194,16 @@ socket.on('player_action', async ({ tableId, username, action }) => {
 
     if (total === 21) {
       current.status = 'stand';
-      nextTurn(tableId);
+      await nextTurn(tableId);
     } else if (total > 21) {
       current.status = 'bust';
-      nextTurn(tableId);
+      await nextTurn(tableId);
     }
 
     io.to(tableId).emit('table_update', getSafeTable(table));
   } else if (action === 'stand') {
     current.status = 'stand';
-    nextTurn(tableId);
+    await nextTurn(tableId);
   } else if (action === 'double') {
     if (current.hand.length === 2) {
       const user = await User.findOne({ where: { username } });
@@ -218,7 +222,7 @@ socket.on('player_action', async ({ tableId, username, action }) => {
         current.status = 'stand';
 
         io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
-        nextTurn(tableId);
+        await nextTurn(tableId);
       }
     }
   }
@@ -278,68 +282,79 @@ socket.on('sync_state', ({ tableId, username }) => {
 async function startRound(tableId) {
   const table = tables[tableId];
 
-  // znajdź wszystkich aktywnych graczy z zakładem
   const activePlayers = table.players
     .map((player, idx) => ({ player, idx }))
     .filter(({ player }) => player && player.bet > 0);
 
-  // pierwsza runda rozdawania po jednej karcie dla graczy
-  activePlayers.forEach(({ player }) => {
+  // 🃏 Pierwsza karta dla każdego gracza (z delayem)
+  for (let { player } of activePlayers) {
     player.hand = [drawCard(tableId)];
-  });
+    io.to(tableId).emit('table_update', getSafeTable(table));
+    await sleep(300); // <– delay między kartami
+  }
 
-  // jedna karta dla krupiera (widoczna)
+  // 🃏 Pierwsza karta dla dealera (widoczna)
   table.dealerHand = [drawCard(tableId)];
+  io.to(tableId).emit('table_update', getSafeTable(table));
+  await sleep(400); // <– lekkie napięcie
 
-  // druga runda rozdawania po jednej karcie dla graczy
-  activePlayers.forEach(({ player }) => {
+  // 🃏 Druga karta dla graczy
+  for (let { player } of activePlayers) {
     player.hand.push(drawCard(tableId));
     const total = calculateHand(player.hand);
-    if (total === 21 && player.hand.length === 2) {
-      player.status = 'stand'; // automatyczny stand przy blackjacku
-    } else {
-      player.status = 'playing';
-    }
-  });
+    player.status = (total === 21 && player.hand.length === 2) ? 'stand' : 'playing';
+    io.to(tableId).emit('table_update', getSafeTable(table));
+    await sleep(300);
+  }
 
-  // druga karta dla krupiera (ukryta)
+  // 🕵️‍♂️ Zakryta karta dealera (do późniejszego odkrycia)
   table.dealerHand.push({ rank: '❓', suit: null });
 
   table.phase = 'playing';
   table.currentPlayerIndex = 0;
 
   io.to(tableId).emit('round_started', getSafeTable(table));
-  promptNextPlayer(tableId);
+  await promptNextPlayer(tableId);
 }
 
-function promptNextPlayer(tableId) {
+async function promptNextPlayer(tableId) {
   const table = tables[tableId];
   let idx = table.currentPlayerIndex;
   while (idx < table.players.length && (!table.players[idx] || table.players[idx].status !== 'playing')) idx++;
-  if (idx >= table.players.length) playDealer(tableId);
-  else {
+  if (idx >= table.players.length) {
+    await playDealer(tableId); // 💥 To teraz działa z delayem
+  } else {
     table.currentPlayerIndex = idx;
     io.to(tableId).emit('your_turn', table.players[idx].username);
   }
 }
 
-function nextTurn(tableId) {
+async function nextTurn(tableId) {
   tables[tableId].currentPlayerIndex++;
-  promptNextPlayer(tableId);
+  await promptNextPlayer(tableId);
 }
 
-function playDealer(tableId) {
+async function playDealer(tableId) {
   const table = tables[tableId];
+
+  // 🔓 Odsłoń zakrytą kartę krupiera z dramatycznym opóźnieniem
   if (table.dealerHand.length > 1 && table.dealerHand[1].rank === '❓') {
+    await sleep(800); // napięcie!
     table.dealerHand[1] = drawCard(tableId);
     io.to(tableId).emit('table_update', getSafeTable(table));
   }
+
   let dealerTotal = calculateHand(table.dealerHand);
+
+  // 🃏 Dobieraj karty do 17 z opóźnieniem
   while (dealerTotal < 17) {
+    await sleep(600); // czas na oddech widzów
     table.dealerHand.push(drawCard(tableId));
     dealerTotal = calculateHand(table.dealerHand);
+    io.to(tableId).emit('table_update', getSafeTable(table));
   }
 
+  // 🎯 Rozlicz graczy
   table.players.forEach(p => {
     if (!p || p.bet === 0) return;
     const playerTotal = calculateHand(p.hand);
@@ -352,9 +367,8 @@ function playDealer(tableId) {
       p.result = 'Blackjack!';
       User.findOne({ where: { username: p.username } }).then(user => {
         if (user) {
-          user.balance += Math.floor(p.bet * 2.5); // płaci 3:2
+          user.balance += Math.floor(p.bet * 2.5);
           user.save();
-
           Transaction.create({
             userId: user.id,
             balanceChange: Math.floor(p.bet * 2.5),
@@ -378,7 +392,6 @@ function playDealer(tableId) {
         if (user) {
           user.balance += p.bet * 2;
           user.save();
-
           Transaction.create({
             userId: user.id,
             balanceChange: p.bet * 2,
@@ -392,12 +405,11 @@ function playDealer(tableId) {
         if (user) {
           user.balance += p.bet;
           user.save();
-
           Transaction.create({
             userId: user.id,
             balanceChange: p.bet,
             type: 'refund'
-          }); 
+          });
         }
       });
     } else {
