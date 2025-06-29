@@ -438,7 +438,11 @@ async function playDealer(tableId) {
 
 function resetTable(tableId) {
   const table = tables[tableId];
-  table.players = table.players.map(p => p ? { ...p, hand: [], bet: 0, status: 'waiting', result: '' } : null);
+  const newPlayers = Array(5).fill(null);
+  table.players.forEach((p, i) => {
+    if (p) newPlayers[i] = { ...p, hand: [], bet: 0, status: 'waiting', result: '' };
+  });
+  table.players = newPlayers;
   table.dealerHand = [];
   table.phase = 'waiting_for_bets';
   table.currentPlayerIndex = 0;
