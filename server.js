@@ -201,28 +201,39 @@ socket.on('player_action', async ({ tableId, username, action }) => {
   const current = table.players[table.currentPlayerIndex];
   if (!current || current.username !== username) return;
 
-  const activeHand = current.activeHand === 'split' ? current.splitHand : current.hand;
-
   if (action === 'hit') {
-    activeHand.push(drawCard(tableId)); 
-    const total = calculateHand(current.hand);
-
-    io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
+    const activeHand = current.activeHand === 'split' ? current.splitHand : current.hand;
+    activeHand.push(drawCard(tableId));
+    const total = calculateHand(activeHand);
 
     if (total === 21) {
       current.status = 'stand';
-      await nextTurn(tableId);
+      if (current.hasSplit && current.activeHand === 'main') {
+        current.activeHand = 'split';
+      } else {
+        await nextTurn(tableId);
+      }
     } else if (total > 21) {
       current.status = 'bust';
-      await nextTurn(tableId);
+      if (current.hasSplit && current.activeHand === 'main') {
+        current.activeHand = 'split';
+        current.status = 'playing';
+      } else {
+        await nextTurn(tableId);
+      }
     }
 
     io.to(tableId).emit('table_update', getSafeTable(table));
   } else if (action === 'stand') {
-    current.status = 'stand';
-    await nextTurn(tableId);
+    if (current.hasSplit && current.activeHand === 'main') {
+      current.activeHand = 'split';
+    } else {
+      current.status = 'stand';
+      await nextTurn(tableId);
+    }
+    io.to(tableId).emit('table_update', getSafeTable(table));
   } else if (action === 'double') {
-    if (current.hand.length === 2) {
+    if ((current.activeHand === 'main' ? current.hand : current.splitHand).length === 2) {
       const user = await User.findOne({ where: { username } });
       if (user && user.balance >= current.bet) {
         user.balance -= current.bet;
@@ -234,40 +245,42 @@ socket.on('player_action', async ({ tableId, username, action }) => {
           type: 'double'
         });
 
-        current.bet *= 2;
-        current.hand.push(drawCard(tableId));
+        const activeHand = current.activeHand === 'split' ? current.splitHand : current.hand;
+        activeHand.push(drawCard(tableId));
         current.status = 'stand';
 
-        io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
-        await nextTurn(tableId);
+        if (current.hasSplit && current.activeHand === 'main') {
+          current.activeHand = 'split';
+          current.status = 'playing';
+        } else {
+          await nextTurn(tableId);
+        }
       }
     }
+  } else if (action === 'split') {
+    if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank) {
+      const user = await User.findOne({ where: { username } });
+      if (!user || user.balance < current.bet) return;
+
+      user.balance -= current.bet;
+      await user.save();
+
+      await Transaction.create({
+        userId: user.id,
+        balanceChange: -current.bet,
+        type: 'split'
+      });
+
+      // Split logic
+      const splitCard = current.hand.pop();
+      current.splitHand = [splitCard, drawCard(tableId)];
+      current.hand.push(drawCard(tableId));
+      current.hasSplit = true;
+      current.activeHand = 'main'; // Start with main hand
+
+      io.to(tableId).emit('table_update', getSafeTable(table));
+    }
   }
-else if (action === 'split') {
-  if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank) {
-    const user = await User.findOne({ where: { username } });
-    if (!user || user.balance < current.bet) return;
-
-    user.balance -= current.bet;
-    await user.save();
-
-    await Transaction.create({
-      userId: user.id,
-      balanceChange: -current.bet,
-      type: 'split'
-    });
-
-    // Stwórz nową rękę w tym samym slocie jako "split hand"
-    const splitCard = current.hand.pop();
-    current.splitHand = [splitCard, drawCard(tableId)];
-    current.hand.push(drawCard(tableId));
-    current.hasSplit = true;
-
-    io.to(tableId).emit('table_update', getSafeTable(table));
-  }
-}
-
-  io.to(tableId).emit('table_update', getSafeTable(table));
 });
 // Automatyczna synchronizacja po odświeżeniu
 socket.on('sync_state', ({ tableId, username }) => {
@@ -339,14 +352,16 @@ async function nextTurn(tableId) {
   const table = tables[tableId];
   const current = table.players[table.currentPlayerIndex];
   
-  // Jeśli gracz ma split i jeszcze nie zagrał split ręki
-  if (current?.hasSplit && !current.splitPlayed) {
-    current.splitPlayed = true;
-    // Pozostawiamy gracza w tym samym slocie, ale ustawiamy splitHand jako aktywną
+  if (current?.hasSplit && current.activeHand === 'main') {
+    // Switch to split hand
     current.activeHand = 'split';
+    current.status = 'playing';
   } else {
+    // Move to next player
     table.currentPlayerIndex++;
-    current.activeHand = 'main'; // Reset dla następnego gracza
+    if (current) {
+      current.activeHand = 'main'; // Reset for next time
+    }
   }
   
   await promptNextPlayer(tableId);
@@ -441,7 +456,19 @@ async function playDealer(tableId) {
 
 function resetTable(tableId) {
   const table = tables[tableId];
-  table.players = table.players.map(p => p ? { ...p, hand: [], bet: 0, status: 'waiting', result: '' } : null);
+  table.players = table.players.map(p => {
+    if (!p) return null;
+    return {
+      ...p,
+      hand: [],
+      splitHand: null,
+      hasSplit: false,
+      activeHand: 'main',
+      bet: 0,
+      status: 'waiting',
+      result: ''
+    };
+  });
   table.dealerHand = [];
   table.phase = 'waiting_for_bets';
   table.currentPlayerIndex = 0;
