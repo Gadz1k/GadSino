@@ -201,8 +201,10 @@ socket.on('player_action', async ({ tableId, username, action }) => {
   const current = table.players[table.currentPlayerIndex];
   if (!current || current.username !== username) return;
 
+  const activeHand = current.activeHand === 'split' ? current.splitHand : current.hand;
+
   if (action === 'hit') {
-    current.hand.push(drawCard(tableId));
+    activeHand.push(drawCard(tableId)); 
     const total = calculateHand(current.hand);
 
     io.to(tableId).emit('player_updated', { username: current.username, hand: current.hand });
@@ -241,40 +243,29 @@ socket.on('player_action', async ({ tableId, username, action }) => {
       }
     }
   }
-  else if (action === 'split') {
-    if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank) {
-      const user = await User.findOne({ where: { username } });
-      if (!user || user.balance < current.bet) return;
+else if (action === 'split') {
+  if (current.hand.length === 2 && current.hand[0].rank === current.hand[1].rank) {
+    const user = await User.findOne({ where: { username } });
+    if (!user || user.balance < current.bet) return;
 
-      user.balance -= current.bet;
-      await user.save();
+    user.balance -= current.bet;
+    await user.save();
 
-      await Transaction.create({
-        userId: user.id,
-        balanceChange: -current.bet,
-        type: 'split'
-      });
+    await Transaction.create({
+      userId: user.id,
+      balanceChange: -current.bet,
+      type: 'split'
+    });
 
-      // Stwórz dwie ręce – jedna zostaje, druga z kartą idzie do slotu pustego
-      const splitCard = current.hand.pop();
-      const newHand = [splitCard];
-      current.hand.push(drawCard(tableId));
-      newHand.push(drawCard(tableId));
+    // Stwórz nową rękę w tym samym slocie jako "split hand"
+    const splitCard = current.hand.pop();
+    current.splitHand = [splitCard, drawCard(tableId)];
+    current.hand.push(drawCard(tableId));
+    current.hasSplit = true;
 
-      const newSlotIndex = table.players.findIndex(p => !p);
-      if (newSlotIndex === -1) return; // brak miejsca
-
-      table.players[newSlotIndex] = {
-        username,
-        hand: newHand,
-        bet: current.bet,
-        status: 'playing',
-        result: ''
-      };
-
-      io.to(tableId).emit('table_update', getSafeTable(table));
-    }
+    io.to(tableId).emit('table_update', getSafeTable(table));
   }
+}
 
   io.to(tableId).emit('table_update', getSafeTable(table));
 });
@@ -345,7 +336,19 @@ async function promptNextPlayer(tableId) {
 }
 
 async function nextTurn(tableId) {
-  tables[tableId].currentPlayerIndex++;
+  const table = tables[tableId];
+  const current = table.players[table.currentPlayerIndex];
+  
+  // Jeśli gracz ma split i jeszcze nie zagrał split ręki
+  if (current?.hasSplit && !current.splitPlayed) {
+    current.splitPlayed = true;
+    // Pozostawiamy gracza w tym samym slocie, ale ustawiamy splitHand jako aktywną
+    current.activeHand = 'split';
+  } else {
+    table.currentPlayerIndex++;
+    current.activeHand = 'main'; // Reset dla następnego gracza
+  }
+  
   await promptNextPlayer(tableId);
 }
 
