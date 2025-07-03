@@ -599,121 +599,90 @@ app.get('/player/:username/history', async (req, res) => {
 });
 
 // =======================================================
-//          LOGIKA AUTOMATU (SLOT MACHINE)
+//          LOGIKA AUTOMATU "30 COINS"
 // =======================================================
 
-// --- Konfiguracja automatu ---
-const SLOTS_CONFIG = {
-    SYMBOLS: ['wisnia', 'dzwon', 'siódemka', 'BAR'],
-    PAYTABLE: {
-        'wisnia,wisnia,wisnia': 10,
-        'dzwon,dzwon,dzwon': 25,
-        'BAR,BAR,BAR': 50,
-        'siódemka,siódemka,siódemka': 100,
-    },
-    BONUS_BUY_COST_MULTIPLIER: 80
+// --- Stan gry dla każdego gracza (przechowywany w pamięci serwera) ---
+// W prawdziwej aplikacji to powinno być w bazie danych (np. Redis), ale na razie wystarczy.
+const playerGameStates = {};
+
+// --- Konfiguracja gry "30 Coins" ---
+const THIRTY_COINS_CONFIG = {
+    // Definiujemy tylko symbole, które mają znaczenie w grze podstawowej
+    SYMBOLS: [null, null, null, 'CASH_INFINITY', 'CLUSTER_COLLECTOR'], // null = puste pole
+    BONUS_TRIGGER_COUNT: 6,
+    CASH_INFINITY_VALUES: [5, 6, 7, 8, 9, 10]
 };
 
-// --- Endpoint do zwykłego spina ---
-app.post('/slots/spin', async (req, res) => {
-    const { username, bet } = req.body;
+// Funkcja pomocnicza do inicjalizacji stanu gry dla nowego gracza
+function initializeGameState(username) {
+    if (!playerGameStates[username]) {
+        playerGameStates[username] = {
+            // Środkowa siatka 5x3, na której lądują symbole
+            grid: Array(15).fill(null)
+        };
+    }
+}
 
-    if (!username || !bet || bet <= 0) {
-        return res.status(400).json({ message: 'Nieprawidłowe dane.' });
+// --- Endpoint do gry podstawowej "30 Coins" ---
+app.post('/30coins/spin', async (req, res) => {
+    const { username } = req.body;
+    const bet = 10; // Załóżmy stałą stawkę
+
+    // Sprawdzenie gracza i salda
+    const user = await User.findOne({ where: { username } });
+    if (!user || user.balance < bet) {
+        return res.status(400).json({ message: 'Niewystarczające środki' });
     }
 
-    try {
-        const user = await User.findOne({ where: { username } });
+    // Inicjalizacja stanu gry, jeśli gracz gra po raz pierwszy
+    initializeGameState(username);
+    const gameState = playerGameStates[username];
 
-        if (!user) {
-            return res.status(404).json({ message: 'Nie znaleziono gracza' });
+    // Pobranie opłaty za spin
+    user.balance -= bet;
+    await Transaction.create({ userId: user.id, balanceChange: -bet, type: '30coins_bet' });
+
+    // --- Główna mechanika spina ---
+    // Symulujemy nowy "rzut" symboli na siatkę 5x3 (15 pól)
+    // Symbole "lepkie" (Cash Infinity) pozostają na swoich miejscach
+    for (let i = 0; i < gameState.grid.length; i++) {
+        // Kręcimy tylko te pola, które nie są "lepkie"
+        if (!gameState.grid[i] || !gameState.grid[i].sticky) {
+            // Losujemy, czy na polu coś wyląduje
+            if (Math.random() < 0.15) { // 15% szansy na symbol
+                const symbolType = THIRTY_COINS_CONFIG.SYMBOLS[Math.floor(Math.random() * THIRTY_COINS_CONFIG.SYMBOLS.length)];
+                if (symbolType === 'CASH_INFINITY') {
+                    const value = THIRTY_COINS_CONFIG.CASH_INFINITY_VALUES[Math.floor(Math.random() * THIRTY_COINS_CONFIG.CASH_INFINITY_VALUES.length)];
+                    gameState.grid[i] = { type: 'CASH_INFINITY', value: value, sticky: true };
+                } else {
+                    gameState.grid[i] = { type: symbolType }; // Inne symbole nie są lepkie
+                }
+            } else {
+                gameState.grid[i] = null; // Puste pole
+            }
         }
-        if (user.balance < bet) {
-            return res.status(400).json({ message: 'Niewystarczające środki' });
-        }
-
-        // 1. Pobierz opłatę za spin
-        user.balance -= bet;
-        await Transaction.create({ userId: user.id, balanceChange: -bet, type: 'slot_bet' });
-
-        // 2. Losuj wynik
-        const { SYMBOLS, PAYTABLE } = SLOTS_CONFIG;
-        const result = [
-            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)],
-            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)],
-            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)],
-        ];
-        const resultKey = result.join(',');
-
-        // 3. Oblicz i dodaj ewentualną wygraną
-        let winAmount = 0;
-        if (PAYTABLE[resultKey]) {
-            winAmount = bet * PAYTABLE[resultKey];
-            user.balance += winAmount;
-            await Transaction.create({ userId: user.id, balanceChange: winAmount, type: 'slot_win' });
-        }
-
-        // 4. Zapisz wszystkie zmiany w bazie
-        await user.save();
-
-        // 5. Wyślij odpowiedź do gracza
-        res.json({
-            reels: result,
-            winAmount: winAmount,
-            newBalance: user.balance
-        });
-
-    } catch (error) {
-        console.error('Błąd podczas spina:', error);
-        res.status(500).json({ message: 'Wewnętrzny błąd serwera.' });
-    }
-});
-
-// --- Endpoint do zakupu bonusu ---
-app.post('/slots/buy-bonus', async (req, res) => {
-    const { username, bet } = req.body;
-    const { BONUS_BUY_COST_MULTIPLIER, PAYTABLE } = SLOTS_CONFIG;
-    const bonusCost = bet * BONUS_BUY_COST_MULTIPLIER;
-
-    if (!username || !bet || bet <= 0) {
-        return res.status(400).json({ message: 'Nieprawidłowe dane.' });
     }
 
-    try {
-        const user = await User.findOne({ where: { username } });
+    // Sprawdzamy, czy bonus został uruchomiony
+    const bonusSymbolsCount = gameState.grid.filter(symbol => symbol !== null).length;
+    let bonusTriggered = false;
 
-        if (!user) {
-            return res.status(404).json({ message: 'Nie znaleziono gracza' });
-        }
-        if (user.balance < bonusCost) {
-            return res.status(400).json({ message: 'Niewystarczające środki na zakup bonusu' });
-        }
-
-        // 1. Pobierz opłatę za bonus
-        user.balance -= bonusCost;
-        await Transaction.create({ userId: user.id, balanceChange: -bonusCost, type: 'slot_bonus_buy' });
-
-        // 2. Gwarantowana wygrana w rundzie bonusowej (tutaj Jackpot dla przykładu)
-        const result = ['siódemka', 'siódemka', 'siódemka'];
-        const winAmount = bet * PAYTABLE[result.join(',')];
-        user.balance += winAmount;
-        await Transaction.create({ userId: user.id, balanceChange: winAmount, type: 'slot_win_bonus' });
-
-        // 3. Zapisz zmiany w bazie
-        await user.save();
-
-        // 4. Wyślij odpowiedź
-        res.json({
-            reels: result,
-            winAmount: winAmount,
-            newBalance: user.balance,
-            bonusActivated: true
-        });
-
-    } catch (error) {
-        console.error('Błąd podczas zakupu bonusu:', error);
-        res.status(500).json({ message: 'Wewnętrzny błąd serwera.' });
+    if (bonusSymbolsCount >= THIRTY_COINS_CONFIG.BONUS_TRIGGER_COUNT) {
+        bonusTriggered = true;
+        // W przyszłości tutaj będzie logika startu rundy bonusowej
+        // Na razie resetujemy siatkę po "wygranym" bonusie
+        playerGameStates[username].grid = Array(15).fill(null);
     }
+
+    await user.save();
+
+    res.json({
+        grid: gameState.grid, // Aktualny stan siatki do wyświetlenia na frontendzie
+        newBalance: user.balance,
+        bonusTriggered: bonusTriggered,
+        winAmount: 0 // W grze podstawowej nie ma wygranych
+    });
 });
 
 sequelize.sync().then(() => {
