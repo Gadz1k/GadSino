@@ -1,12 +1,6 @@
 require('dotenv').config();
 const express = require('express');
-// server.js
-app.use(cors({
-    origin: 'https://gadz1k.github.io', 
-    methods: ['GET', 'POST']
-}));
-
-// ... reszta kodu bez zmian ...
+const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcrypt');
