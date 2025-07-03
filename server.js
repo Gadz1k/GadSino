@@ -599,89 +599,88 @@ app.get('/player/:username/history', async (req, res) => {
 });
 
 // =======================================================
-//          LOGIKA AUTOMATU "30 COINS"
+//          LOGIKA AUTOMATU "30 COINS" (WERSJA 2.0)
 // =======================================================
 
-// --- Stan gry dla każdego gracza (przechowywany w pamięci serwera) ---
-// W prawdziwej aplikacji to powinno być w bazie danych (np. Redis), ale na razie wystarczy.
 const playerGameStates = {};
 
-// --- Konfiguracja gry "30 Coins" ---
 const THIRTY_COINS_CONFIG = {
-    // Definiujemy tylko symbole, które mają znaczenie w grze podstawowej
-    SYMBOLS: [null, null, null, 'CASH_INFINITY', 'CLUSTER_COLLECTOR'], // null = puste pole
-    BONUS_TRIGGER_COUNT: 6,
-    CASH_INFINITY_VALUES: [5, 6, 7, 8, 9, 10]
+    GRID_ROWS: 6,
+    GRID_COLS: 5,
+    // Symbole, które mogą pojawić się w grze podstawowej
+    BASE_GAME_SYMBOLS: [
+        { type: 'CASH_INFINITY', value: [5, 10, 15], sticky: true, chance: 0.1 },
+        { type: 'MYSTERY', sticky: false, chance: 0.05 },
+        { type: 'MINI_JACKPOT', sticky: true, chance: 0.02 },
+        { type: 'MINOR_JACKPOT', sticky: true, chance: 0.01 }
+    ],
+    BONUS_TRIGGER_COUNT: 6
 };
 
-// Funkcja pomocnicza do inicjalizacji stanu gry dla nowego gracza
 function initializeGameState(username) {
     if (!playerGameStates[username]) {
         playerGameStates[username] = {
-            // Środkowa siatka 5x3, na której lądują symbole
-            grid: Array(15).fill(null)
+            grid: Array(THIRTY_COINS_CONFIG.GRID_ROWS * THIRTY_COINS_CONFIG.GRID_COLS).fill(null)
         };
     }
 }
 
-// --- Endpoint do gry podstawowej "30 Coins" ---
 app.post('/30coins/spin', async (req, res) => {
     const { username } = req.body;
-    const bet = 10; // Załóżmy stałą stawkę
-
-    // Sprawdzenie gracza i salda
+    const bet = 10;
     const user = await User.findOne({ where: { username } });
     if (!user || user.balance < bet) {
         return res.status(400).json({ message: 'Niewystarczające środki' });
     }
 
-    // Inicjalizacja stanu gry, jeśli gracz gra po raz pierwszy
     initializeGameState(username);
     const gameState = playerGameStates[username];
 
-    // Pobranie opłaty za spin
     user.balance -= bet;
     await Transaction.create({ userId: user.id, balanceChange: -bet, type: '30coins_bet' });
 
     // --- Główna mechanika spina ---
-    // Symulujemy nowy "rzut" symboli na siatkę 5x3 (15 pól)
-    // Symbole "lepkie" (Cash Infinity) pozostają na swoich miejscach
-    for (let i = 0; i < gameState.grid.length; i++) {
-        // Kręcimy tylko te pola, które nie są "lepkie"
-        if (!gameState.grid[i] || !gameState.grid[i].sticky) {
-            // Losujemy, czy na polu coś wyląduje
-            if (Math.random() < 0.15) { // 15% szansy na symbol
-                const symbolType = THIRTY_COINS_CONFIG.SYMBOLS[Math.floor(Math.random() * THIRTY_COINS_CONFIG.SYMBOLS.length)];
-                if (symbolType === 'CASH_INFINITY') {
-                    const value = THIRTY_COINS_CONFIG.CASH_INFINITY_VALUES[Math.floor(Math.random() * THIRTY_COINS_CONFIG.CASH_INFINITY_VALUES.length)];
-                    gameState.grid[i] = { type: 'CASH_INFINITY', value: value, sticky: true };
-                } else {
-                    gameState.grid[i] = { type: symbolType }; // Inne symbole nie są lepkie
+    const { GRID_ROWS, GRID_COLS, BASE_GAME_SYMBOLS } = THIRTY_COINS_CONFIG;
+
+    // Kręcimy tylko w "strefie aktywnej" (środkowe 3 rzędy)
+    for (let row = 1; row < GRID_ROWS - 2; row++) { // Rzędy 1, 2, 3 (indeksowane od 0)
+        for (let col = 0; col < GRID_COLS; col++) {
+            const index = row * GRID_COLS + col;
+            
+            // Kręcimy tylko te pola, które nie są "lepkie"
+            if (!gameState.grid[index] || !gameState.grid[index].sticky) {
+                gameState.grid[index] = null; // Czyścimy pole przed nowym losem
+
+                // Losujemy, czy pojawi się nowy symbol
+                for (const symbol of BASE_GAME_SYMBOLS) {
+                    if (Math.random() < symbol.chance) {
+                        let newSymbol = { type: symbol.type, sticky: symbol.sticky };
+                        if (symbol.type === 'CASH_INFINITY') {
+                            newSymbol.value = symbol.value[Math.floor(Math.random() * symbol.value.length)];
+                        }
+                        gameState.grid[index] = newSymbol;
+                        break; // Wylosowaliśmy symbol, przerywamy pętlę dla tego pola
+                    }
                 }
-            } else {
-                gameState.grid[i] = null; // Puste pole
             }
         }
     }
 
-    // Sprawdzamy, czy bonus został uruchomiony
     const bonusSymbolsCount = gameState.grid.filter(symbol => symbol !== null).length;
     let bonusTriggered = false;
-
     if (bonusSymbolsCount >= THIRTY_COINS_CONFIG.BONUS_TRIGGER_COUNT) {
         bonusTriggered = true;
-        // W przyszłości tutaj będzie logika startu rundy bonusowej
-        // Na razie resetujemy siatkę po "wygranym" bonusie
-        playerGameStates[username].grid = Array(15).fill(null);
+        // W przyszłości tu będzie start rundy bonusowej, na razie tylko informujemy
+        // playerGameStates[username].grid = Array(30).fill(null); // Nie czyścimy siatki, bo symbole przechodzą do bonusu!
     }
 
     await user.save();
 
     res.json({
-        grid: gameState.grid, // Aktualny stan siatki do wyświetlenia na frontendzie
+        grid: gameState.grid,
         newBalance: user.balance,
         bonusTriggered: bonusTriggered,
-        winAmount: 0 // W grze podstawowej nie ma wygranych
+        winAmount: 0
     });
 });
 
