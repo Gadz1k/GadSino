@@ -9,55 +9,12 @@ const sequelize = require('./sequelize');
 const User = require('./models/user');
 const Transaction = require('./models/transaction');
 
-const dealerAIResponses = {
-    round_start: [
-        () => "Zobaczymy, kto dziś ma szczęście. Proszę stawiać.",
-        () => "Nowa runda, nowa szansa na opróżnienie portfeli. Waszych, oczywiście.",
-        () => "Powodzenia. Będzie wam potrzebne."
-    ],
-    player_blackjack: [
-        (username) => `Blackjack dla ${username}. Nawet ślepej kurze trafi się ziarno.`,
-        (username) => `No proszę, ${username}, 21. Gratuluję, zepsułeś mi humor.`
-    ],
-    player_win: [
-        (username) => `${username} wygrywa. Ciesz się, póki możesz.`,
-        (username) => `Twoja wygrana, ${username}. Następna ręka nie będzie tak łaskawa.`
-    ],
-    player_hit_high: [
-        (username) => `${username} ma dużo i dobiera... Odważnie.`,
-        (username) => `Chwila napięcia... ${username} ryzykuje. Ciekawa strategia.`
-    ],
-    player_bust: [
-        (username) => `Gdzie się tak spieszysz, ${username}? Do 21, nie do 30.`,
-        (username) => `${username}, fura. Podręcznik do liczenia leży przy wyjściu.`,
-        (username) => `Za dużo. Dziękuję za udział w programie "Sponsoruj Kasyno".`
-    ],
-    dealer_win: [
-        () => "I tak zawsze wygrywa kasyno. Następny.",
-        () => "Lepsza karta następnym razem. A może nie.",
-        () => "Dziękuję za grę. I za żetony."
-    ],
-    push: [
-        () => "Remis. Daję ci jeszcze jedną szansę, żeby przegrać.",
-        () => "Push. Nikt nie wygrywa, co za nuda."
-    ]
-};
-
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 const port = process.env.PORT || 3000;
-
-function sendDealerMessage(tableId, eventType, username = '') {
-    const responseFunctions = dealerAIResponses[eventType];
-    if (responseFunctions && responseFunctions.length > 0) {
-        const func = responseFunctions[Math.floor(Math.random() * responseFunctions.length)];
-        const message = func(username);
-        io.to(tableId).emit('dealer_message', message);
-    }
-} 
 
 function createShoe(decks = 3) {
   const ranks = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
@@ -246,10 +203,6 @@ socket.on('player_action', async ({ tableId, username, action }) => {
 
   if (action === 'hit') {
     const activeHand = current.activeHand === 'split' ? current.splitHand : current.hand;
-    const totalBeforeHit = calculateHand(activeHand);
-    if (totalBeforeHit >= 19) {
-      sendDealerMessage(tableId, 'player_hit_high', current.username);
-    }
     activeHand.push(drawCard(tableId));
     const total = calculateHand(activeHand);
 
@@ -262,7 +215,6 @@ socket.on('player_action', async ({ tableId, username, action }) => {
       }
     } else if (total > 21) {
       current.status = 'bust';
-      sendDealerMessage(tableId, 'player_bust', current.username);
       if (current.hasSplit && current.activeHand === 'main') {
         current.activeHand = 'split';
         current.status = 'playing';
@@ -348,8 +300,6 @@ socket.on('sync_state', ({ tableId, username }) => {
 
 async function startRound(tableId) {
   const table = tables[tableId];
-
-  sendDealerMessage(tableId, 'round_start');
 
   const activePlayers = table.players
     .map((player, idx) => ({ player, idx }))
@@ -448,7 +398,6 @@ async function playDealer(tableId) {
       p.result = 'Przegrana';
     } else if (isPlayerBJ && !isDealerBJ) {
       p.result = 'Blackjack!';
-      sendDealerMessage(tableId, 'player_blackjack', p.username);
       User.findOne({ where: { username: p.username } }).then(user => {
         if (user) {
           user.balance += Math.floor(p.bet * 2.5);
@@ -462,10 +411,8 @@ async function playDealer(tableId) {
       });
     } else if (!isPlayerBJ && isDealerBJ) {
       p.result = 'Przegrana';
-      sendDealerMessage(tableId, 'dealer_win');
     } else if (isPlayerBJ && isDealerBJ) {
       p.result = 'Remis';
-      sendDealerMessage(tableId, 'push');
       User.findOne({ where: { username: p.username } }).then(user => {
         if (user) {
           user.balance += p.bet;
@@ -474,7 +421,6 @@ async function playDealer(tableId) {
       });
     } else if (dealerTotal > 21 || playerTotal > dealerTotal) {
       p.result = 'Wygrana';
-      sendDealerMessage(tableId, 'player_win', p.username);
       User.findOne({ where: { username: p.username } }).then(user => {
         if (user) {
           user.balance += p.bet * 2;
@@ -488,7 +434,6 @@ async function playDealer(tableId) {
       });
     } else if (playerTotal === dealerTotal) {
       p.result = 'Remis';
-      sendDealerMessage(tableId, 'push');
       User.findOne({ where: { username: p.username } }).then(user => {
         if (user) {
           user.balance += p.bet;
@@ -502,7 +447,6 @@ async function playDealer(tableId) {
       });
     } else {
       p.result = 'Przegrana';
-      sendDealerMessage(tableId, 'dealer_win');
     }
   });
 
