@@ -598,6 +598,124 @@ app.get('/player/:username/history', async (req, res) => {
   res.json(fakeHistory);
 });
 
+// =======================================================
+//          LOGIKA AUTOMATU (SLOT MACHINE)
+// =======================================================
+
+// --- Konfiguracja automatu ---
+const SLOTS_CONFIG = {
+    SYMBOLS: ['wisnia', 'dzwon', 'siódemka', 'BAR'],
+    PAYTABLE: {
+        'wisnia,wisnia,wisnia': 10,
+        'dzwon,dzwon,dzwon': 25,
+        'BAR,BAR,BAR': 50,
+        'siódemka,siódemka,siódemka': 100,
+    },
+    BONUS_BUY_COST_MULTIPLIER: 80
+};
+
+// --- Endpoint do zwykłego spina ---
+app.post('/slots/spin', async (req, res) => {
+    const { username, bet } = req.body;
+
+    if (!username || !bet || bet <= 0) {
+        return res.status(400).json({ message: 'Nieprawidłowe dane.' });
+    }
+
+    try {
+        const user = await User.findOne({ where: { username } });
+
+        if (!user) {
+            return res.status(404).json({ message: 'Nie znaleziono gracza' });
+        }
+        if (user.balance < bet) {
+            return res.status(400).json({ message: 'Niewystarczające środki' });
+        }
+
+        // 1. Pobierz opłatę za spin
+        user.balance -= bet;
+        await Transaction.create({ userId: user.id, balanceChange: -bet, type: 'slot_bet' });
+
+        // 2. Losuj wynik
+        const { SYMBOLS, PAYTABLE } = SLOTS_CONFIG;
+        const result = [
+            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)],
+            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)],
+            SYMBOLS[Math.floor(Math.random() * SYMBOLS.length)],
+        ];
+        const resultKey = result.join(',');
+
+        // 3. Oblicz i dodaj ewentualną wygraną
+        let winAmount = 0;
+        if (PAYTABLE[resultKey]) {
+            winAmount = bet * PAYTABLE[resultKey];
+            user.balance += winAmount;
+            await Transaction.create({ userId: user.id, balanceChange: winAmount, type: 'slot_win' });
+        }
+
+        // 4. Zapisz wszystkie zmiany w bazie
+        await user.save();
+
+        // 5. Wyślij odpowiedź do gracza
+        res.json({
+            reels: result,
+            winAmount: winAmount,
+            newBalance: user.balance
+        });
+
+    } catch (error) {
+        console.error('Błąd podczas spina:', error);
+        res.status(500).json({ message: 'Wewnętrzny błąd serwera.' });
+    }
+});
+
+// --- Endpoint do zakupu bonusu ---
+app.post('/slots/buy-bonus', async (req, res) => {
+    const { username, bet } = req.body;
+    const { BONUS_BUY_COST_MULTIPLIER, PAYTABLE } = SLOTS_CONFIG;
+    const bonusCost = bet * BONUS_BUY_COST_MULTIPLIER;
+
+    if (!username || !bet || bet <= 0) {
+        return res.status(400).json({ message: 'Nieprawidłowe dane.' });
+    }
+
+    try {
+        const user = await User.findOne({ where: { username } });
+
+        if (!user) {
+            return res.status(404).json({ message: 'Nie znaleziono gracza' });
+        }
+        if (user.balance < bonusCost) {
+            return res.status(400).json({ message: 'Niewystarczające środki na zakup bonusu' });
+        }
+
+        // 1. Pobierz opłatę za bonus
+        user.balance -= bonusCost;
+        await Transaction.create({ userId: user.id, balanceChange: -bonusCost, type: 'slot_bonus_buy' });
+
+        // 2. Gwarantowana wygrana w rundzie bonusowej (tutaj Jackpot dla przykładu)
+        const result = ['siódemka', 'siódemka', 'siódemka'];
+        const winAmount = bet * PAYTABLE[result.join(',')];
+        user.balance += winAmount;
+        await Transaction.create({ userId: user.id, balanceChange: winAmount, type: 'slot_win_bonus' });
+
+        // 3. Zapisz zmiany w bazie
+        await user.save();
+
+        // 4. Wyślij odpowiedź
+        res.json({
+            reels: result,
+            winAmount: winAmount,
+            newBalance: user.balance,
+            bonusActivated: true
+        });
+
+    } catch (error) {
+        console.error('Błąd podczas zakupu bonusu:', error);
+        res.status(500).json({ message: 'Wewnętrzny błąd serwera.' });
+    }
+});
+
 sequelize.sync().then(() => {
   server.listen(port, () => console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
 }).catch(err => console.error('Błąd bazy danych:', err));
