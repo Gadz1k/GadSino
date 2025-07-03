@@ -123,7 +123,14 @@ io.on('connection', socket => {
     if (!table) return;
     if (table.players.some(p => p?.username === username)) return;
     if (slotIndex >= 0 && slotIndex < 6 && !table.players[slotIndex]) {
-      table.players[slotIndex] = { username, hand: [], bet: 0, status: 'waiting', result: '' };
+      table.players[slotIndex] = {
+        username,
+        hand: [],
+        bet: 0,
+        sideBets: { '21+3': 0, 'pair': 0, 'vs': 0 },
+        status: 'waiting',
+        result: ''
+      };
       socket.join(tableId);
       io.to(tableId).emit('table_update', getSafeTable(table));
     }
@@ -448,6 +455,76 @@ async function playDealer(tableId) {
     } else {
       p.result = 'Przegrana';
     }
+
+    // 🧠 ROZLICZ SIDE BETY
+    if (p.sideBets) {
+      const playerCards = p.hand.slice(0, 2);
+      const dealerUpCard = table.dealerHand[0];
+      const combined = [...playerCards, dealerUpCard];
+
+      const suits = combined.map(c => c.suit);
+      const ranks = combined.map(c => c.rank);
+
+      const isFlush = suits.every(s => s === suits[0]);
+      const sortedRanks = [...ranks].sort((a, b) => {
+        const order = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+        return order.indexOf(a) - order.indexOf(b);
+      });
+      const isStraight = sortedRanks.every((r, i, arr) => {
+        if (i === 0) return true;
+        const order = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
+        return order.indexOf(r) === order.indexOf(arr[i - 1]) + 1;
+      });
+      const isTrips = ranks[0] === ranks[1] && ranks[1] === ranks[2];
+      const isPair = playerCards[0].rank === playerCards[1].rank;
+      const isSameSuit = playerCards[0].suit === playerCards[1].suit;
+
+      const userPromise = User.findOne({ where: { username: p.username } });
+
+      if (p.sideBets['21+3'] > 0) {
+        let multiplier = 0;
+        if (isTrips && isFlush) multiplier = 100;
+        else if (isStraight && isFlush) multiplier = 40;
+        else if (isTrips) multiplier = 30;
+        else if (isStraight) multiplier = 10;
+        else if (isFlush) multiplier = 5;
+
+        if (multiplier > 0) {
+          userPromise.then(user => {
+            const win = p.sideBets['21+3'] * multiplier;
+            user.balance += win;
+            user.save();
+            Transaction.create({
+              userId: user.id,
+              balanceChange: win,
+              type: 'side-win-21+3'
+            });
+          });
+        }
+      }
+
+      if (p.sideBets['pair'] > 0 && isPair) {
+        let multiplier = 6;
+        if (isSameSuit) multiplier = 12;
+        if (isSameSuit && playerCards[0].rank === playerCards[1].rank) multiplier = 25;
+
+        userPromise.then(user => {
+          const win = p.sideBets['pair'] * multiplier;
+          user.balance += win;
+          user.save();
+          Transaction.create({
+            userId: user.id,
+            balanceChange: win,
+            type: 'side-win-pair'
+          });
+        });
+      }
+
+      // (można dodać logic VS tutaj w przyszłości)
+
+      // Reset zakładów bocznych
+      p.sideBets = { '21+3': 0, 'pair': 0, 'vs': 0 };
+    }
   });
 
   io.to(tableId).emit('round_result', getSafeTable(table));
@@ -465,6 +542,7 @@ function resetTable(tableId) {
       hasSplit: false,
       activeHand: 'main',
       bet: 0,
+      sideBets: { '21+3': 0, 'pair': 0, 'vs': 0 },
       status: 'waiting',
       result: ''
     };
