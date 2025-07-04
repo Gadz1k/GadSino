@@ -647,9 +647,9 @@ app.post('/30coins/spin', async (req, res) => {
     // --- Główna mechanika spina ---
     const { GRID_ROWS, GRID_COLS, BASE_GAME_SYMBOLS } = THIRTY_COINS_CONFIG;
 
-    // Kręcimy tylko w "strefie aktywnej" (środkowe 3 rzędy)
-    for (let row = 1; row < GRID_ROWS - 2; row++) { // Rzędy 1, 2, 3 (indeksowane od 0)
-        for (let col = 0; col < GRID_COLS; col++) {
+    // Kręcimy tylko w środkowym obszarze 3x3
+    for (let row = 1; row <= 3; row++) {
+        for (let col = 1; col <= 3; col++) { // <-- ZMIANA TUTAJ
             const index = row * GRID_COLS + col;
             
             // Kręcimy tylko te pola, które nie są "lepkie"
