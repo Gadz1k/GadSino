@@ -607,19 +607,21 @@ const playerGameStates = {};
 const THIRTY_COINS_CONFIG = {
     GRID_ROWS: 6,
     GRID_COLS: 5,
-    // Symbole, które mogą pojawić się w grze podstawowej (ze zbalansowaną szansą)
     BASE_GAME_SYMBOLS: [
-        { type: 'CASH_INFINITY', value: [5, 10, 15], sticky: true, chance: 0.02 },  // 2% szansy
-        { type: 'MYSTERY', sticky: false, chance: 0.01 },                           // 1% szansy
-        { type: 'MINI_JACKPOT', sticky: true, chance: 0.005 },                       // 0.5% szansy
-        { type: 'MINOR_JACKPOT', sticky: true, chance: 0.002 }                       // 0.2% szansy
+        // Zwykła, NIE-LEPKA moneta (najczęstsza)
+        { type: 'CASH', value: [5, 10, 15], sticky: false, chance: 0.10 }, 
+        
+        // Specjalna, LEPKA moneta (odpowiednik czerwonej)
+        { type: 'CASH_INFINITY', value: [20, 50], sticky: true, chance: 0.02 },
+        
+        // Inne symbole, które też NIE są lepkie
+        { type: 'MYSTERY', sticky: false, chance: 0.01 },
+        { type: 'MINI_JACKPOT', sticky: false, chance: 0.005 },
+        { type: 'MINOR_JACKPOT', sticky: false, chance: 0.002 }
     ],
     BONUS_TRIGGER_COUNT: 6,
-    // Symbole, które mogą pojawić się w rundzie bonusowej
     BONUS_GAME_SYMBOLS: [
-        { type: 'CASH_INFINITY', value: [5, 10, 15, 20, 25, 50], chance: 0.8 },
-        { type: 'MINI_JACKPOT', chance: 0.05 },
-        { type: 'MINOR_JACKPOT', chance: 0.02 }
+        // ... (na razie bez zmian) ...
     ]
 };
 
