@@ -666,7 +666,7 @@ app.post('/30coins/spin', async (req, res) => {
             for (const symbol of BASE_GAME_SYMBOLS) {
                 if (Math.random() < symbol.chance) {
                     let newSymbol = { type: symbol.type, sticky: symbol.sticky };
-                    if (symbol.type === 'CASH_INFINITY') {
+                    if (symbol.value) {
                         newSymbol.value = symbol.value[Math.floor(Math.random() * symbol.value.length)];
                     }
                     newGrid[i] = newSymbol;
