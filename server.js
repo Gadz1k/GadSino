@@ -648,7 +648,7 @@ app.post('/30coins/spin', async (req, res) => {
     const { GRID_ROWS, GRID_COLS, BASE_GAME_SYMBOLS } = THIRTY_COINS_CONFIG;
 
     // Kręcimy tylko w środkowym obszarze 3x3
-    for (let row = 1; row <= 3; row++) {
+    for (let row = 2; row <= 3; row++) {
         for (let col = 1; col <= 3; col++) { // <-- ZMIANA TUTAJ
             const index = row * GRID_COLS + col;
             
