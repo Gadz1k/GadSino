@@ -608,20 +608,18 @@ const THIRTY_COINS_CONFIG = {
     GRID_ROWS: 6,
     GRID_COLS: 5,
     BASE_GAME_SYMBOLS: [
-        // Zwykła, NIE-LEPKA moneta (najczęstsza)
-        { type: 'CASH', value: [5, 10, 15], sticky: false, chance: 0.10 }, 
-        
-        // Specjalna, LEPKA moneta (odpowiednik czerwonej)
-        { type: 'CASH_INFINITY', value: [20, 50], sticky: true, chance: 0.02 },
-        
-        // Inne symbole, które też NIE są lepkie
+        { type: 'CASH', value: [10, 20, 30], sticky: false, chance: 0.10 },
+        { type: 'CASH_INFINITY', value: [50, 100], sticky: true, chance: 0.02 },
         { type: 'MYSTERY', sticky: false, chance: 0.01 },
         { type: 'MINI_JACKPOT', sticky: false, chance: 0.005 },
         { type: 'MINOR_JACKPOT', sticky: false, chance: 0.002 }
     ],
     BONUS_TRIGGER_COUNT: 6,
+
     BONUS_GAME_SYMBOLS: [
-        // ... (na razie bez zmian) ...
+        { type: 'CASH', value: [10, 20, 30, 40, 50, 100], chance: 0.8 }, // 80% szansy na zwykłą monetę
+        { type: 'MINI_JACKPOT', chance: 0.05 }, // 5% szansy na Mini Jackpot
+        { type: 'MINOR_JACKPOT', chance: 0.02 }  // 2% szansy na Minor Jackpot
     ]
 };
 
@@ -708,11 +706,8 @@ app.post('/30coins/spin', async (req, res) => {
 });
 
 app.post('/30coins/bonus-spin', async (req, res) => {
-    const { username, grid } = req.body; // Odbieramy aktualny stan siatki od gracza
-
-    // Tutaj nie ma pobierania opłaty, bo re-spiny są "darmowe"
+    const { username, grid } = req.body;
     
-    // Znajdź puste pola na siatce
     const emptySlotsIndexes = [];
     for (let i = 0; i < grid.length; i++) {
         if (grid[i] === null) {
@@ -720,29 +715,32 @@ app.post('/30coins/bonus-spin', async (req, res) => {
         }
     }
 
-    // Jeśli nie ma pustych pól, bonus się kończy
     if (emptySlotsIndexes.length === 0) {
-        return res.json({ grid, bonusEnded: true });
+        return res.json({ grid, bonusEnded: true, hasLandedNewSymbol: false });
     }
 
-    // Wylosuj, ile nowych symboli pojawi się w tym re-spinie (np. 1 do 3)
     const newSymbolsCount = Math.floor(Math.random() * 3) + 1;
     let hasLandedNewSymbol = false;
 
     for (let i = 0; i < newSymbolsCount; i++) {
         if (emptySlotsIndexes.length > 0) {
             hasLandedNewSymbol = true;
-            // Losuj puste pole
             const randomIndex = Math.floor(Math.random() * emptySlotsIndexes.length);
             const slotIndexToFill = emptySlotsIndexes.splice(randomIndex, 1)[0];
 
-            // Losuj nowy symbol bonusowy
-            const symbol = THIRTY_COINS_CONFIG.BONUS_GAME_SYMBOLS[0]; // Na razie uproszczone losowanie
-            let newSymbol = { type: symbol.type };
-            if (symbol.type === 'CASH_INFINITY') {
-                newSymbol.value = symbol.value[Math.floor(Math.random() * symbol.value.length)];
+            // --- POCZĄTEK POPRAWKI ---
+            // Poprawna logika losowania symbolu na podstawie szans
+            for (const symbol of THIRTY_COINS_CONFIG.BONUS_GAME_SYMBOLS) {
+                if (Math.random() < symbol.chance) {
+                    let newSymbol = { type: symbol.type, sticky: true }; // W bonusie wszystkie symbole są lepkie
+                    if (symbol.value) { // Jeśli to moneta, wylosuj jej wartość
+                        newSymbol.value = symbol.value[Math.floor(Math.random() * symbol.value.length)];
+                    }
+                    grid[slotIndexToFill] = newSymbol;
+                    break; 
+                }
             }
-            grid[slotIndexToFill] = newSymbol;
+            // --- KONIEC POPRAWKI ---
         }
     }
     
