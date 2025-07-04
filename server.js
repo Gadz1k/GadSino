@@ -607,14 +607,20 @@ const playerGameStates = {};
 const THIRTY_COINS_CONFIG = {
     GRID_ROWS: 6,
     GRID_COLS: 5,
-    // Symbole, które mogą pojawić się w grze podstawowej
+    // Symbole, które mogą pojawić się w grze podstawowej (ze zbalansowaną szansą)
     BASE_GAME_SYMBOLS: [
-        { type: 'CASH_INFINITY', value: [5, 10, 15], sticky: true, chance: 0.1 },
-        { type: 'MYSTERY', sticky: false, chance: 0.05 },
-        { type: 'MINI_JACKPOT', sticky: true, chance: 0.02 },
-        { type: 'MINOR_JACKPOT', sticky: true, chance: 0.01 }
+        { type: 'CASH_INFINITY', value: [5, 10, 15], sticky: true, chance: 0.02 },  // 2% szansy
+        { type: 'MYSTERY', sticky: false, chance: 0.01 },                           // 1% szansy
+        { type: 'MINI_JACKPOT', sticky: true, chance: 0.005 },                       // 0.5% szansy
+        { type: 'MINOR_JACKPOT', sticky: true, chance: 0.002 }                       // 0.2% szansy
     ],
-    BONUS_TRIGGER_COUNT: 6
+    BONUS_TRIGGER_COUNT: 6,
+    // Symbole, które mogą pojawić się w rundzie bonusowej
+    BONUS_GAME_SYMBOLS: [
+        { type: 'CASH_INFINITY', value: [5, 10, 15, 20, 25, 50], chance: 0.8 },
+        { type: 'MINI_JACKPOT', chance: 0.05 },
+        { type: 'MINOR_JACKPOT', chance: 0.02 }
+    ]
 };
 
 function initializeGameState(username) {
@@ -680,6 +686,52 @@ app.post('/30coins/spin', async (req, res) => {
         newBalance: user.balance,
         bonusTriggered: bonusTriggered,
         winAmount: 0
+    });
+});
+
+app.post('/30coins/bonus-spin', async (req, res) => {
+    const { username, grid } = req.body; // Odbieramy aktualny stan siatki od gracza
+
+    // Tutaj nie ma pobierania opłaty, bo re-spiny są "darmowe"
+    
+    // Znajdź puste pola na siatce
+    const emptySlotsIndexes = [];
+    for (let i = 0; i < grid.length; i++) {
+        if (grid[i] === null) {
+            emptySlotsIndexes.push(i);
+        }
+    }
+
+    // Jeśli nie ma pustych pól, bonus się kończy
+    if (emptySlotsIndexes.length === 0) {
+        return res.json({ grid, bonusEnded: true });
+    }
+
+    // Wylosuj, ile nowych symboli pojawi się w tym re-spinie (np. 1 do 3)
+    const newSymbolsCount = Math.floor(Math.random() * 3) + 1;
+    let hasLandedNewSymbol = false;
+
+    for (let i = 0; i < newSymbolsCount; i++) {
+        if (emptySlotsIndexes.length > 0) {
+            hasLandedNewSymbol = true;
+            // Losuj puste pole
+            const randomIndex = Math.floor(Math.random() * emptySlotsIndexes.length);
+            const slotIndexToFill = emptySlotsIndexes.splice(randomIndex, 1)[0];
+
+            // Losuj nowy symbol bonusowy
+            const symbol = THIRTY_COINS_CONFIG.BONUS_GAME_SYMBOLS[0]; // Na razie uproszczone losowanie
+            let newSymbol = { type: symbol.type };
+            if (symbol.type === 'CASH_INFINITY') {
+                newSymbol.value = symbol.value[Math.floor(Math.random() * symbol.value.length)];
+            }
+            grid[slotIndexToFill] = newSymbol;
+        }
+    }
+    
+    res.json({
+        grid: grid,
+        bonusEnded: emptySlotsIndexes.length === 0,
+        hasLandedNewSymbol: hasLandedNewSymbol
     });
 });
 
