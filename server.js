@@ -626,8 +626,7 @@ function initializeGameState(username) {
 }
 
 app.post('/30coins/spin', async (req, res) => {
-    const { username } = req.body;
-    const bet = 10;
+    const { username, bet } = req.body;
     const user = await User.findOne({ where: { username } });
     if (!user || user.balance < bet) {
         return res.status(400).json({ message: 'Niewystarczające środki' });
