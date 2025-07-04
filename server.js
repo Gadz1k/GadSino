@@ -638,54 +638,70 @@ app.post('/30coins/spin', async (req, res) => {
         return res.status(400).json({ message: 'Niewystarczające środki' });
     }
 
-    initializeGameState(username);
+    initializeGameState(username); // Upewniamy się, że gracz ma stan gry
     const gameState = playerGameStates[username];
 
+    // Pobranie opłaty
     user.balance -= bet;
     await Transaction.create({ userId: user.id, balanceChange: -bet, type: '30coins_bet' });
 
-    // --- Główna mechanika spina ---
+    // --- NOWA, POPRAWIONA LOGIKA SPINA ---
     const { GRID_ROWS, GRID_COLS, BASE_GAME_SYMBOLS } = THIRTY_COINS_CONFIG;
+    const newGrid = Array(GRID_ROWS * GRID_COLS).fill(null);
 
-    // Kręcimy tylko w środkowym obszarze 3x3
-    for (let row = 2; row <= 3; row++) {
-        for (let col = 1; col <= 3; col++) { // <-- ZMIANA TUTAJ
-            const index = row * GRID_COLS + col;
-            
-            // Kręcimy tylko te pola, które nie są "lepkie"
-            if (!gameState.grid[index] || !gameState.grid[index].sticky) {
-                gameState.grid[index] = null; // Czyścimy pole przed nowym losem
+    // 1. Zachowaj lepkie symbole (Cash Infinity) z poprzedniego stanu
+    for (let i = 0; i < gameState.grid.length; i++) {
+        if (gameState.grid[i] && gameState.grid[i].sticky) {
+            newGrid[i] = gameState.grid[i];
+        }
+    }
 
-                // Losujemy, czy pojawi się nowy symbol
-                for (const symbol of BASE_GAME_SYMBOLS) {
-                    if (Math.random() < symbol.chance) {
-                        let newSymbol = { type: symbol.type, sticky: symbol.sticky };
-                        if (symbol.type === 'CASH_INFINITY') {
-                            newSymbol.value = symbol.value[Math.floor(Math.random() * symbol.value.length)];
-                        }
-                        gameState.grid[index] = newSymbol;
-                        break; // Wylosowaliśmy symbol, przerywamy pętlę dla tego pola
+    // 2. Wylosuj nowe symbole na pozostałych, pustych polach
+    for (let i = 0; i < newGrid.length; i++) {
+        // Jeśli pole jest puste (nie ma na nim lepkiego symbolu)
+        if (newGrid[i] === null) {
+            // Losujemy, czy pojawi się nowy symbol
+            for (const symbol of BASE_GAME_SYMBOLS) {
+                if (Math.random() < symbol.chance) {
+                    let newSymbol = { type: symbol.type, sticky: symbol.sticky };
+                    if (symbol.type === 'CASH_INFINITY') {
+                        newSymbol.value = symbol.value[Math.floor(Math.random() * symbol.value.length)];
                     }
+                    newGrid[i] = newSymbol;
+                    break; // Wylosowaliśmy symbol, przerywamy dla tego pola
                 }
             }
         }
     }
+    
+    // Zapisujemy nowy stan siatki dla gracza
+    gameState.grid = newGrid;
 
-    const bonusSymbolsCount = gameState.grid.filter(symbol => symbol !== null).length;
-    let bonusTriggered = false;
-    if (bonusSymbolsCount >= THIRTY_COINS_CONFIG.BONUS_TRIGGER_COUNT) {
-        bonusTriggered = true;
-        // W przyszłości tu będzie start rundy bonusowej, na razie tylko informujemy
-        // playerGameStates[username].grid = Array(30).fill(null); // Nie czyścimy siatki, bo symbole przechodzą do bonusu!
+    // 3. Sprawdź warunek aktywacji bonusu (tylko w aktywnej strefie)
+    let symbolsInActiveZone = 0;
+    for (let row = 2; row <= 3; row++) { // Nasza strefa 2x3
+        for (let col = 1; col <= 3; col++) {
+            const index = row * GRID_COLS + col;
+            if (gameState.grid[index] !== null) {
+                symbolsInActiveZone++;
+            }
+        }
     }
 
+    let bonusTriggered = false;
+    if (symbolsInActiveZone >= THIRTY_COINS_CONFIG.BONUS_TRIGGER_COUNT) {
+        bonusTriggered = true;
+        // Ważne: Po aktywacji bonusu, siatka jest czyszczona dopiero po jego zakończeniu.
+        // Na razie zostawiamy ją w takim stanie, w jakim jest.
+    }
+    
     await user.save();
 
     res.json({
         grid: gameState.grid,
         newBalance: user.balance,
         bonusTriggered: bonusTriggered,
-        winAmount: 0
+        winAmount: 0 // Gra podstawowa nadal nie daje bezpośrednich wygranych
     });
 });
 
