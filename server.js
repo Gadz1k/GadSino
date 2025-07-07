@@ -86,10 +86,18 @@ const crashGame = {
 function generateCrashPoint() {
   const e = 2 ** 32;
   const h = crypto.randomInt(0, e - 1);
-  if (h % 33 === 0) return 1.00;
+
+  // Szansa 1 do 25 na natychmiastowy crash na 1.00x
+  if (h % 25 === 0) {
+    return 1.00;
+  }
+
+  const houseEdge = 0.99; // 99% RTP (Return to Player)
+
+  // Poprawiona formuła matematyczna
+  const crashPoint = Math.floor(100 * houseEdge * e / (e - h)) / 100;
   
-  const houseEdge = 0.99;
-  return Math.floor(houseEdge * e / (e-h)) / 100;
+  return Math.max(1.00, crashPoint); // Zabezpieczenie, aby nigdy nie zwrócić mniej niż 1.00
 }
 
 async function runCrashGame() {
