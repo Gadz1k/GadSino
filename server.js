@@ -46,6 +46,13 @@ const ROULETTE_BETS = {
     'col3': { payout: 3, condition: (num) => num > 0 && num % 3 === 0 },
 };
 
+// =======================================================
+//          KONFIGURACJA GRY PLINKO
+// =======================================================
+const PLINKO_ROWS = 12; // Liczba rzędów kołków
+// Mnożniki na dole piramidy, od lewej do prawej
+const PLINKO_MULTIPLIERS = [16, 9, 2, 1.4, 1.1, 1, 0.5, 1, 1.1, 1.4, 2, 9, 16];
+
 function createShoe(decks = 3) {
   const ranks = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
   const suits = ['clubs', 'diamonds', 'hearts', 'spades'];
@@ -1046,6 +1053,57 @@ async function resolveRouletteBets() {
 
 // Uruchomienie gry
 runRouletteGame();
+
+// =======================================================
+//          ENDPOINT API DLA GRY PLINKO
+// =======================================================
+app.post('/plinko/drop', async (req, res) => {
+    const { username, bet } = req.body;
+    if (!username || !bet || bet <= 0) {
+        return res.status(400).json({ message: 'Nieprawidłowy zakład.' });
+    }
+
+    const user = await User.findOne({ where: { username } });
+    if (!user || user.balance < bet) {
+        return res.status(400).json({ message: 'Niewystarczające środki.' });
+    }
+
+    // Pobieramy opłatę za grę
+    user.balance -= bet;
+    await Transaction.create({ userId: user.id, balanceChange: -bet, type: 'plinko_bet' });
+
+    // --- Symulacja spadania kulki ---
+    let path = []; // Zapis ścieżki (0 = w lewo, 1 = w prawo)
+    let position = 0; // Pozycja końcowa (liczba ruchów w prawo)
+
+    for (let i = 0; i < PLINKO_ROWS; i++) {
+        const direction = crypto.randomInt(0, 2); // 0 lub 1
+        path.push(direction);
+        if (direction === 1) {
+            position++;
+        }
+    }
+    
+    // Zapewniamy, że pozycja mieści się w zakresie tablicy mnożników
+    const finalPosition = Math.min(position, PLINKO_MULTIPLIERS.length - 1);
+    const multiplier = PLINKO_MULTIPLIERS[finalPosition];
+    const winnings = Math.floor(bet * multiplier);
+
+    // Dodajemy wygraną do salda
+    if (winnings > 0) {
+        user.balance += winnings;
+        await Transaction.create({ userId: user.id, balanceChange: winnings, type: 'plinko_win' });
+    }
+
+    await user.save();
+
+    res.json({
+        path,           // np. [0, 1, 1, 0, ...]
+        multiplier,     // np. 2
+        winnings,       // np. 200
+        newBalance: user.balance
+    });
+});
 
 sequelize.sync().then(() => {
   server.listen(port, () => console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
