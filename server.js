@@ -107,6 +107,36 @@ let tables = {
 };
 
 // =======================================================
+//          LOGIKA GRY "MINES"
+// =======================================================
+
+// Przechowuje aktywne gry dla każdego gracza
+let minesGames = {}; 
+
+// Funkcje pomocnicze do obliczenia mnożnika na podstawie kombinacji
+function factorial(n) {
+    if (n === 0 || n === 1) return 1;
+    let result = 1;
+    for (let i = 2; i <= n; i++) {
+        result *= i;
+    }
+    return result;
+}
+
+function combinations(n, k) {
+    if (k < 0 || k > n) return 0;
+    return factorial(n) / (factorial(k) * factorial(n - k));
+}
+
+// Funkcja obliczająca mnożnik po odkryciu 'count' bezpiecznych pól
+function calculateMinesMultiplier(totalTiles, minesCount, revealedCount) {
+    const houseEdge = 0.99; // 1% dla kasyna
+    const probability = combinations(totalTiles - revealedCount, minesCount) / combinations(totalTiles, minesCount);
+    const multiplier = houseEdge / probability;
+    return parseFloat(multiplier.toFixed(2));
+} 
+
+// =======================================================
 //          LOGIKA GRY "CRASH" - CZĘŚĆ GŁÓWNA
 // =======================================================
 
@@ -1101,6 +1131,109 @@ app.post('/plinko/drop', async (req, res) => {
         path,           // np. [0, 1, 1, 0, ...]
         multiplier,     // np. 2
         winnings,       // np. 200
+        newBalance: user.balance
+    });
+});
+
+// Endpoint do rozpoczęcia nowej gry
+app.post('/mines/start', async (req, res) => {
+    const { username, bet, mines, tiles } = req.body;
+    if (!username || !bet || bet <= 0 || !mines || !tiles) {
+        return res.status(400).json({ message: 'Nieprawidłowe parametry gry.' });
+    }
+
+    const user = await User.findOne({ where: { username } });
+    if (!user || user.balance < bet) {
+        return res.status(400).json({ message: 'Niewystarczające środki.' });
+    }
+
+    user.balance -= bet;
+    await user.save();
+    await Transaction.create({ userId: user.id, balanceChange: -bet, type: 'mines_bet' });
+
+    // Tworzenie planszy z minami
+    const mineLocations = new Set();
+    while (mineLocations.size < mines) {
+        mineLocations.add(crypto.randomInt(0, tiles));
+    }
+
+    // Zapisujemy stan gry na serwerze
+    minesGames[username] = {
+        bet,
+        tiles,
+        mines,
+        mineLocations: Array.from(mineLocations),
+        revealedTiles: [],
+        gameOver: false,
+        currentMultiplier: 1.00
+    };
+    
+    const nextMultiplier = calculateMinesMultiplier(tiles, mines, 1);
+
+    res.json({
+        message: 'Gra rozpoczęta!',
+        newBalance: user.balance,
+        nextMultiplier: nextMultiplier
+    });
+});
+
+
+// Endpoint do odkrycia pola
+app.post('/mines/reveal', async (req, res) => {
+    const { username, tileIndex } = req.body;
+    const game = minesGames[username];
+
+    if (!game || game.gameOver || game.revealedTiles.includes(tileIndex)) {
+        return res.status(400).json({ message: 'Nie można odkryć tego pola.' });
+    }
+    
+    // Sprawdzamy, czy to mina
+    if (game.mineLocations.includes(tileIndex)) {
+        game.gameOver = true;
+        delete minesGames[username]; // Koniec gry, usuwamy stan
+        return res.json({
+            isMine: true,
+            mineLocations: game.mineLocations
+        });
+    }
+
+    // Jeśli nie mina, to bezpieczne pole
+    game.revealedTiles.push(tileIndex);
+    game.currentMultiplier = calculateMinesMultiplier(game.tiles, game.mines, game.revealedTiles.length);
+    const nextMultiplier = calculateMinesMultiplier(game.tiles, game.mines, game.revealedTiles.length + 1);
+
+    res.json({
+        isMine: false,
+        revealedTiles: game.revealedTiles,
+        currentMultiplier: game.currentMultiplier,
+        nextMultiplier: nextMultiplier
+    });
+});
+
+
+// Endpoint do wypłaty (cashout)
+app.post('/mines/cashout', async (req, res) => {
+    const { username } = req.body;
+    const game = minesGames[username];
+
+    if (!game || game.gameOver || game.revealedTiles.length === 0) {
+        return res.status(400).json({ message: 'Nie można teraz wypłacić.' });
+    }
+    
+    const winnings = Math.floor(game.bet * game.currentMultiplier);
+    const user = await User.findOne({ where: { username } });
+
+    if (user) {
+        user.balance += winnings;
+        await user.save();
+        await Transaction.create({ userId: user.id, balanceChange: winnings, type: 'mines_win' });
+    }
+
+    delete minesGames[username]; // Koniec gry, usuwamy stan
+
+    res.json({
+        message: 'Wypłacono wygraną!',
+        winnings: winnings,
         newBalance: user.balance
     });
 });
