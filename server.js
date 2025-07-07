@@ -479,8 +479,17 @@ function resetTable(tableId) {
 
 app.get('/player/:username', async (req, res) => {
   const user = await User.findOne({ where: { username: req.params.username } });
-  if (!user) return res.status(404).json({ balance: 0 });
-  res.json({ balance: user.balance });
+
+  if (!user) {
+    return res.status(404).json({ message: "Użytkownik nie został znaleziony" });
+  }
+
+  res.json({
+    username: user.username,
+    email: user.email,
+    balance: user.balance,
+    createdAt: user.createdAt
+  });
 });
 
 app.get('/users', async (req, res) => {
