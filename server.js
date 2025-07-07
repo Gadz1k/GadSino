@@ -17,6 +17,35 @@ const io = new Server(server, {
 });
 const port = process.env.PORT || 3000;
 
+// =======================================================
+//          DEFINICJE I STAŁE GRY W RULETKĘ
+// =======================================================
+const ROULETTE_NUMBERS = {
+    0: 'green', 32: 'red', 15: 'black', 19: 'red', 4: 'black', 21: 'red', 2: 'black',
+    25: 'red', 17: 'black', 34: 'red', 6: 'black', 27: 'red', 13: 'black', 36: 'red',
+    11: 'black', 30: 'red', 8: 'black', 23: 'red', 10: 'black', 5: 'red', 24: 'black',
+    16: 'red', 33: 'black', 1: 'red', 20: 'black', 14: 'red', 31: 'black', 9: 'red',
+    22: 'black', 18: 'red', 29: 'black', 7: 'red', 28: 'black', 12: 'red', 35: 'black',
+    3: 'red', 26: 'black'
+};
+
+// Definicje każdego możliwego zakładu, jego wypłaty i warunków wygranej
+const ROULETTE_BETS = {
+    'straight': { payout: 36, type: 'number' },
+    'red': { payout: 2, condition: (num) => num > 0 && ROULETTE_NUMBERS[num] === 'red' },
+    'black': { payout: 2, condition: (num) => num > 0 && ROULETTE_NUMBERS[num] === 'black' },
+    'even': { payout: 2, condition: (num) => num > 0 && num % 2 === 0 },
+    'odd': { payout: 2, condition: (num) => num > 0 && num % 2 !== 0 },
+    'low': { payout: 2, condition: (num) => num >= 1 && num <= 18 },
+    'high': { payout: 2, condition: (num) => num >= 19 && num <= 36 },
+    'dozen1': { payout: 3, condition: (num) => num >= 1 && num <= 12 },
+    'dozen2': { payout: 3, condition: (num) => num >= 13 && num <= 24 },
+    'dozen3': { payout: 3, condition: (num) => num >= 25 && num <= 36 },
+    'col1': { payout: 3, condition: (num) => num > 0 && num % 3 === 1 },
+    'col2': { payout: 3, condition: (num) => num > 0 && num % 3 === 2 },
+    'col3': { payout: 3, condition: (num) => num > 0 && num % 3 === 0 },
+};
+
 function createShoe(decks = 3) {
   const ranks = ['2','3','4','5','6','7','8','9','10','J','Q','K','A'];
   const suits = ['clubs', 'diamonds', 'hearts', 'spades'];
@@ -422,6 +451,43 @@ socket.on('sync_state', ({ tableId, username }) => {
       history: crashGame.history,
     });
   });
+
+  // =======================================================
+//          EVENTY RULETKI W SOCKET.IO
+// =======================================================
+socket.on('roulette_bet', async ({ username, betType, amount }) => {
+  if (rouletteGame.phase !== 'betting') return;
+
+  const user = await User.findOne({ where: { username } });
+  if (!user || user.balance < amount || amount <= 0) return;
+  
+  // Sprawdzamy, czy gracz już istnieje w tej rundzie
+  if (!rouletteGame.players[username]) {
+    rouletteGame.players[username] = [];
+  }
+  
+  // Sprawdzamy, czy taki zakład już istnieje i aktualizujemy go, lub dodajemy nowy
+  const existingBet = rouletteGame.players[username].find(b => b.betType === betType);
+  if (existingBet) {
+    existingBet.bet += amount;
+  } else {
+    rouletteGame.players[username].push({ bet: amount, betType });
+  }
+
+  user.balance -= amount;
+  await user.save();
+  await Transaction.create({ userId: user.id, balanceChange: -amount, type: 'roulette_bet' });
+  
+  io.emit('roulette_players_update', rouletteGame.players);
+});
+
+socket.on('get_roulette_state', () => {
+  socket.emit('roulette_state', {
+    phase: rouletteGame.phase,
+    history: rouletteGame.history,
+    players: rouletteGame.players
+  });
+});
 
 });
 
@@ -886,6 +952,100 @@ app.post('/30coins/bonus-spin', async (req, res) => {
         hasLandedNewSymbol: hasLandedNewSymbol
     });
 });
+
+// =======================================================
+//          GŁÓWNA LOGIKA GRY W RULETKĘ
+// =======================================================
+const rouletteGame = {
+  phase: 'waiting', // waiting, betting, spinning, result
+  players: {}, // { username: [{ betType: 'red', amount: 100 }, { betType: 'straight_17', amount: 10 }] }
+  history: [],
+  winningNumber: null
+};
+
+async function runRouletteGame() {
+  // --- Faza obstawiania ---
+  rouletteGame.phase = 'betting';
+  rouletteGame.players = {};
+  io.emit('roulette_state', { phase: 'betting', history: rouletteGame.history });
+  
+  // Odliczanie czasu na zakłady
+  let bettingTimeLeft = 20;
+  const bettingInterval = setInterval(() => {
+    bettingTimeLeft--;
+    io.emit('roulette_bet_tick', bettingTimeLeft);
+    if (bettingTimeLeft <= 0) {
+      clearInterval(bettingInterval);
+      startSpinning();
+    }
+  }, 1000);
+}
+
+async function startSpinning() {
+  // --- Faza kręcenia kołem ---
+  rouletteGame.phase = 'spinning';
+  rouletteGame.winningNumber = crypto.randomInt(0, 36); // Losowanie numeru na początku kręcenia
+  io.emit('roulette_state', { phase: 'spinning' });
+  
+  await sleep(8000); // 8 sekund na animację kręcenia się koła
+  
+  // --- Faza wyników ---
+  rouletteGame.phase = 'result';
+  // Dodajemy do historii i ograniczamy do 15 ostatnich
+  rouletteGame.history.unshift(rouletteGame.winningNumber);
+  if (rouletteGame.history.length > 15) rouletteGame.history.pop();
+  
+  await resolveRouletteBets(); // Obliczamy wygrane
+
+  io.emit('roulette_state', { 
+    phase: 'result', 
+    winningNumber: rouletteGame.winningNumber,
+    history: rouletteGame.history,
+    players: rouletteGame.players
+  });
+  
+  await sleep(7000); // 7 sekund na pokazanie wyników
+  runRouletteGame(); // Rozpocznij nową rundę
+}
+
+async function resolveRouletteBets() {
+  const num = rouletteGame.winningNumber;
+  for (const username in rouletteGame.players) {
+    let totalWinnings = 0;
+    const user = await User.findOne({ where: { username } });
+    if (!user) continue;
+
+    for (const bet of rouletteGame.players[username]) {
+      let win = false;
+      const betDefinition = ROULETTE_BETS[bet.betType];
+
+      if (bet.betType.startsWith('straight_')) {
+        const betNumber = parseInt(bet.betType.split('_')[1]);
+        if (betNumber === num) win = true;
+      } else if (betDefinition && betDefinition.condition(num)) {
+        win = true;
+      }
+      
+      if (win) {
+        const winnings = Math.floor(bet.bet * betDefinition.payout);
+        totalWinnings += winnings;
+        bet.result = 'win';
+        bet.winnings = winnings;
+      } else {
+        bet.result = 'loss';
+      }
+    }
+
+    if (totalWinnings > 0) {
+      user.balance += totalWinnings;
+      await user.save();
+      await Transaction.create({ userId: user.id, balanceChange: totalWinnings, type: 'roulette_win' });
+    }
+  }
+}
+
+// Uruchomienie gry
+runRouletteGame();
 
 sequelize.sync().then(() => {
   server.listen(port, () => console.log(`🃏 Serwer blackjack działa na http://localhost:${port}`));
