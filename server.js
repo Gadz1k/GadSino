@@ -4,6 +4,7 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 
 const sequelize = require('./sequelize');
 const User = require('./models/user');
@@ -68,6 +69,75 @@ let tables = {
     shoe: createShoe()
   }
 };
+
+// =======================================================
+//          LOGIKA GRY "CRASH" - CZĘŚĆ GŁÓWNA
+// =======================================================
+
+const crashGame = {
+  phase: 'waiting', // waiting, betting, running, crashed
+  multiplier: 1.00,
+  crashPoint: 0,
+  players: {}, // { username: { bet: 100, cashoutAt: null, status: 'playing' } }
+  history: [], // przechowuje ostatnie 10 crashów
+  startTime: null
+};
+
+function generateCrashPoint() {
+  const e = 2 ** 32;
+  const h = crypto.randomInt(0, e - 1);
+  if (h % 33 === 0) return 1.00;
+  
+  const houseEdge = 0.99;
+  return Math.floor(houseEdge * e / (e-h)) / 100;
+}
+
+async function runCrashGame() {
+  crashGame.phase = 'betting';
+  crashGame.players = {};
+  crashGame.crashPoint = generateCrashPoint();
+  let bettingTimeLeft = 10;
+
+  io.emit('crash_state', { phase: 'betting', history: crashGame.history });
+
+  const bettingInterval = setInterval(() => {
+    bettingTimeLeft--;
+    io.emit('crash_bet_tick', bettingTimeLeft);
+    if (bettingTimeLeft <= 0) {
+      clearInterval(bettingInterval);
+      
+      crashGame.phase = 'running';
+      crashGame.multiplier = 1.00;
+      crashGame.startTime = Date.now();
+      io.emit('crash_state', { phase: 'running', players: crashGame.players });
+
+      const gameInterval = setInterval(() => {
+        const elapsedTime = (Date.now() - crashGame.startTime) / 1000;
+        crashGame.multiplier = Math.pow(1.05, elapsedTime).toFixed(2);
+
+        if (crashGame.multiplier >= crashGame.crashPoint) {
+          clearInterval(gameInterval);
+          crashGame.phase = 'crashed';
+          crashGame.history.unshift(crashGame.crashPoint);
+          if (crashGame.history.length > 10) crashGame.history.pop();
+
+          io.emit('crash_state', { 
+            phase: 'crashed', 
+            crashPoint: crashGame.crashPoint, 
+            history: crashGame.history 
+          });
+          
+          setTimeout(runCrashGame, 5000);
+        } else {
+          io.emit('crash_tick', crashGame.multiplier);
+        }
+      }, 100);
+    }
+  }, 1000);
+}
+
+// Uruchomienie gry po starcie serwera
+runCrashGame();
 
 app.use(cors());
 app.use(express.json());
@@ -296,6 +366,55 @@ socket.on('sync_state', ({ tableId, username }) => {
     socket.emit('your_turn', username); // ponownie wyślij sygnał, że jego tura
   }
 });
+
+// =======================================================
+  //      TUTAJ WKLEJ KOD DLA GRY CRASH
+  // =======================================================
+  socket.on('crash_bet', async ({ username, amount }) => {
+    if (crashGame.phase !== 'betting' || crashGame.players[username]) return;
+
+    const user = await User.findOne({ where: { username } });
+    if (!user || user.balance < amount || amount <= 0) return;
+
+    user.balance -= amount;
+    await user.save();
+    await Transaction.create({ userId: user.id, balanceChange: -amount, type: 'crash_bet' });
+
+    crashGame.players[username] = { bet: amount, status: 'playing' };
+    io.emit('crash_players_update', crashGame.players);
+  });
+
+
+  socket.on('crash_cashout', async ({ username }) => {
+    const player = crashGame.players[username];
+    if (crashGame.phase !== 'running' || !player || player.status !== 'playing') return;
+
+    const cashoutMultiplier = crashGame.multiplier;
+    const winnings = Math.floor(player.bet * cashoutMultiplier);
+
+    player.status = 'cashed_out';
+    player.cashoutAt = cashoutMultiplier;
+    player.winnings = winnings;
+
+    const user = await User.findOne({ where: { username } });
+    if (user) {
+      user.balance += winnings;
+      await user.save();
+      await Transaction.create({ userId: user.id, balanceChange: winnings, type: 'crash_win' });
+    }
+
+    io.emit('crash_players_update', crashGame.players);
+  });
+
+  socket.on('get_crash_state', () => {
+    socket.emit('crash_state', {
+      phase: crashGame.phase,
+      multiplier: crashGame.multiplier,
+      players: crashGame.players,
+      history: crashGame.history,
+    });
+  });
+
 });
 
 async function startRound(tableId) {
@@ -758,129 +877,6 @@ app.post('/30coins/bonus-spin', async (req, res) => {
         bonusEnded: emptySlotsIndexes.length === 0,
         hasLandedNewSymbol: hasLandedNewSymbol
     });
-});
-
-// =======================================================
-//          LOGIKA GRY "CRASH"
-// =======================================================
-
-// Stan gry Crash - dodaj to razem z innymi zmiennymi globalnymi na górze pliku
-const crashGame = {
-  phase: 'waiting', // waiting, betting, running, crashed
-  multiplier: 1.00,
-  crashPoint: 0,
-  players: {}, // { username: { bet: 100, cashoutAt: null, status: 'playing' } }
-  history: [], // przechowuje ostatnie 10 crashów
-  startTime: null
-};
-
-// Funkcja losująca punkt crasha. Jest lekko "ważona", aby niższe mnożniki były częstsze.
-function generateCrashPoint() {
-  const e = 2 ** 32;
-  const h = crypto.randomInt(0, e - 1); // Używamy krypto dla bezpieczeństwa
-  if (h % 33 === 0) return 1.00; // Szansa 1 do 33 na natychmiastowy crash
-  
-  const houseEdge = 0.99; // 99% RTP (Return to Player)
-  return Math.floor(houseEdge * e / (e-h)) / 100;
-}
-
-// Główna pętla gry
-async function runCrashGame() {
-  // Faza przyjmowania zakładów
-  crashGame.phase = 'betting';
-  crashGame.players = {}; // Czyścimy graczy z poprzedniej rundy
-  crashGame.crashPoint = generateCrashPoint();
-  
-  io.emit('crash_state', { phase: 'betting', history: crashGame.history });
-  
-  await sleep(10000); // 10 sekund na obstawianie
-
-  // Faza gry - mnożnik rośnie
-  crashGame.phase = 'running';
-  crashGame.multiplier = 1.00;
-  crashGame.startTime = Date.now();
-  io.emit('crash_state', { phase: 'running', players: crashGame.players });
-
-  const gameInterval = setInterval(() => {
-    // Obliczamy mnożnik na podstawie czasu, aby był płynny
-    const elapsedTime = (Date.now() - crashGame.startTime) / 1000;
-    crashGame.multiplier = Math.pow(1.05, elapsedTime).toFixed(2);
-
-    if (crashGame.multiplier >= crashGame.crashPoint) {
-      clearInterval(gameInterval);
-      crashGame.phase = 'crashed';
-      
-      // Dodaj do historii i utrzymuj tylko 10 ostatnich wyników
-      crashGame.history.unshift(crashGame.crashPoint);
-      if (crashGame.history.length > 10) crashGame.history.pop();
-
-      io.emit('crash_state', { 
-        phase: 'crashed', 
-        crashPoint: crashGame.crashPoint, 
-        history: crashGame.history 
-      });
-      
-      // Poczekaj 5 sekund i zacznij nową rundę
-      setTimeout(runCrashGame, 5000); 
-
-    } else {
-      io.emit('crash_tick', crashGame.multiplier);
-    }
-  }, 100); // Odświeżanie co 100ms
-}
-
-// Uruchom grę po starcie serwera
-// Potrzebujesz 'crypto', więc dodaj na górze pliku: const crypto = require('crypto');
-runCrashGame();
-
-
-// Dodaj te eventy wewnątrz głównego bloku io.on('connection', socket => { ... });
-
-socket.on('crash_bet', async ({ username, amount }) => {
-  if (crashGame.phase !== 'betting' || crashGame.players[username]) return;
-
-  const user = await User.findOne({ where: { username } });
-  if (!user || user.balance < amount || amount <= 0) return;
-
-  user.balance -= amount;
-  await user.save();
-  await Transaction.create({ userId: user.id, balanceChange: -amount, type: 'crash_bet' });
-
-  crashGame.players[username] = { bet: amount, status: 'playing' };
-  io.emit('crash_players_update', crashGame.players);
-});
-
-
-socket.on('crash_cashout', async ({ username }) => {
-  const player = crashGame.players[username];
-  if (crashGame.phase !== 'running' || !player || player.status !== 'playing') return;
-
-  const cashoutMultiplier = crashGame.multiplier;
-  const winnings = Math.floor(player.bet * cashoutMultiplier);
-
-  player.status = 'cashed_out';
-  player.cashoutAt = cashoutMultiplier;
-  player.winnings = winnings;
-
-  const user = await User.findOne({ where: { username } });
-  if (user) {
-    user.balance += winnings;
-    await user.save();
-    await Transaction.create({ userId: user.id, balanceChange: winnings, type: 'crash_win' });
-  }
-
-  io.emit('crash_players_update', crashGame.players);
-});
-
-// Dodaj ten event, aby nowy gracz od razu widział stan gry
-socket.on('get_crash_state', () => {
-  socket.emit('crash_state', {
-    phase: crashGame.phase,
-    multiplier: crashGame.multiplier,
-    players: crashGame.players,
-    history: crashGame.history,
-    time_left: (crashGame.phase === 'betting') ? (10000 - (Date.now() - crashGame.startTime)) : 0
-  });
 });
 
 sequelize.sync().then(() => {
