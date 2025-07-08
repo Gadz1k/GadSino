@@ -5,7 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 
 // Importy z nowej struktury
-const sequelize = require('./config/database');
+const sequelize = require('./config/sequelize');
 const initializeSockets = require('./sockets');
 
 // Importy serwisów gier

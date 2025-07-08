@@ -1,7 +1,7 @@
 const { Op } = require("sequelize");
 const User = require('../models/user');
 const Transaction = require('../models/transaction');
-const sequelize = require('../config/database');
+const sequelize = require('../config/sequelize');
 
 // Pobieranie danych o graczu
 exports.getPlayerDetails = async (req, res) => {
