@@ -15,7 +15,7 @@ const crashService = require('./services/crash.service');
 // Importy tras
 const authRoutes = require('./routes/auth.routes');
 const userRoutes = require('./routes/user.routes');
-// const gameRoutes = require('./routes/games.routes');
+const gameRoutes = require('./routes/games.routes');
 
 const app = express();
 const server = http.createServer(app);
@@ -30,7 +30,7 @@ app.use(express.json());
 // Rejestracja tras
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
-// app.use('/api/games', gameRoutes);
+app.use('/api/games', gameRoutes);
 
 // Inicjalizacja Socket.IO
 initializeSockets(io);
