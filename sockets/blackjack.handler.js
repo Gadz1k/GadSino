@@ -93,6 +93,14 @@ module.exports = (socket, io) => {
         if (action === 'stand') {
             await blackjackService.nextTurn(tableId);
         }
+
+        if (action === 'double') {
+            await blackjackService.doubleDown(username, tableId);
+        }
+
+        if (action === 'split') {
+            await blackjackService.split(username, tableId);
+        }
         
         // Można tutaj dodać logikę dla 'double' i 'split' w podobny sposób
 
