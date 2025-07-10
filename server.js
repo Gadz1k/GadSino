@@ -9,7 +9,8 @@ const sequelize = require('./config/sequelize');
 const initializeSockets = require('./sockets');
 
 // Importy serwisów gier
-const crashService = require('./services/crash.service');
+const crashService = require('./services/crash.service');   
+const blackjackService = require('./services/blackjack.service');
 // const rouletteService = require('./services/roulette.service');
 
 // Importy tras
@@ -37,6 +38,7 @@ initializeSockets(io);
 
 // Inicjalizacja pętli gier
 crashService.initialize(io);
+blackjackService.initialize(io);
 // rouletteService.initialize(io);
 
 const PORT = process.env.PORT || 3000;
